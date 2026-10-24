@@ -64,8 +64,12 @@ cd "$DEST"
 
 # stdin — это труба curl. Возвращаем терминал, иначе вопросы установщика
 # упрутся в EOF. Это последняя команда bash, дальше управление у Python.
-if [[ ! -t 0 ]] && [[ -r /dev/tty ]]; then
-    exec </dev/tty
+if [[ ! -t 0 ]]; then
+    if ( exec 3</dev/tty ) 2>/dev/null; then
+        exec </dev/tty
+    else
+        printf '%s!%s нет терминала — вопросы установщика недоступны (нужен интерактивный запуск)\n' "$red" "$rst" >&2
+    fi
 fi
 
 say "запускаю установщик"

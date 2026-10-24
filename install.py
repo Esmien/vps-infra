@@ -431,7 +431,13 @@ class Installer:
         if self.dry or self.check_mode:
             return
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        data = json.dumps(self.cfg, ensure_ascii=False, indent=2) + "\n"
+        # Токены живут только в .env — в install.json их быть не должно.
+        safe = json.loads(json.dumps(self.cfg))
+        tg = safe.get("telegram") or {}
+        for key in ("bot_token", "file_bot_token"):
+            if tg.get(key):
+                tg[key] = "__stored_in_notifications_env__"
+        data = json.dumps(safe, ensure_ascii=False, indent=2) + "\n"
         fd, tmp = tempfile.mkstemp(dir=str(CONFIG_FILE.parent), prefix=".tmp-")
         with os.fdopen(fd, "w") as fh:
             fh.write(data)
@@ -1043,12 +1049,15 @@ $$;
         for db, owner, dump in todo:
             info(f"{db} ← {dump.name} ({dump.stat().st_size / 1024**2:.1f} MB)")
             log = STATE_DIR / f"restore-{db}.log"
-            with log.open("w") as lf:
-                proc = subprocess.run(
-                    ["sudo", "-u", "postgres", "pg_restore", f"--dbname={db}", "--clean", "--if-exists",
-                     "--no-owner", "--no-privileges", "--single-transaction", "--verbose"],
-                    stdin=dump.open("rb"), stdout=lf, stderr=subprocess.STDOUT,
-                ) if not self.dry else subprocess.CompletedProcess([], 0)
+            if self.dry:
+                proc = subprocess.CompletedProcess([], 0)
+            else:
+                with dump.open("rb") as dump_fh, log.open("w") as lf:
+                    proc = subprocess.run(
+                        ["sudo", "-u", "postgres", "pg_restore", f"--dbname={db}", "--clean", "--if-exists",
+                         "--no-owner", "--no-privileges", "--single-transaction", "--verbose"],
+                        stdin=dump_fh, stdout=lf, stderr=subprocess.STDOUT,
+                    )
             if proc.returncode != 0:
                 tail = "\n".join(log.read_text(errors="replace").splitlines()[-10:])
                 print(tail, file=sys.stderr)
@@ -1228,9 +1237,12 @@ GROUP BY end_user ORDER BY total_spend DESC LIMIT 100;
                 self.copy_file(src, Path("/usr/local/bin") / name, 0o755)
         ok("скрипты в /usr/local/bin")
 
-        units = CORE_TIMERS + CORE_SERVICES
-        enable = list(CORE_TIMERS) + list(CORE_SERVICES)
         tg = self.cfg.get("telegram") or {}
+        timers = list(CORE_TIMERS)
+        if not tg.get("bot_token"):
+            timers.remove("postgres-backup-notify.timer")
+        units = timers + CORE_SERVICES
+        enable = list(timers) + list(CORE_SERVICES)
         if tg.get("bot_token"):
             units += NOTIFY_SERVICES
             enable += NOTIFY_SERVICES
