@@ -1,0 +1,5 @@
+_state_snapshot/
+out/
+_chk_*.png
+*.md
+.env

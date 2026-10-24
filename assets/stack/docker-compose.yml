@@ -1,0 +1,194 @@
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.105.1   # was main-latest (rolling dev tag: now ships 1.107.0-dev); pinned to newest stable release 2026-10-17
+    container_name: litellm
+    restart: always
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    ports:
+      - "127.0.0.1:4000:4000"
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD}@host.docker.internal:5432/litellm_db
+      STORE_MODEL_IN_DB: "True"
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      UI_USERNAME: ${UI_USERNAME}
+      UI_PASSWORD: ${UI_PASSWORD}
+      # ---- Redis: состояние роутера/auth/rate-limit выносим из памяти процесса ----
+      REDIS_HOST: litellm-redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${LITELLM_REDIS_PASSWORD}
+      # ---- лимиты in-memory очереди апдейтов spend (апстрим #12685) ----
+      MAX_IN_MEMORY_QUEUE_FLUSH_COUNT: "5000"
+      MAX_SIZE_IN_MEMORY_QUEUE: "500"
+      # glibc держит до 8*nproc арен по 64 МиБ; у litellm 17 потоков → [heap] дорос до 700 МиБ
+      MALLOC_ARENA_MAX: "2"
+      # LITELLM_LOG: DEBUG
+
+    depends_on:
+      litellm-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5          # исключение из общего правила: поднимается с прогретым БД до ~2 мин
+      start_period: 60s
+    mem_reservation: 3g     # soft-limit: 3 GB
+    mem_limit: 3.5g         # hard-limit: 3.5 GB
+    memswap_limit: 3.5g     # без до-свапа: иначе Docker выдает 2× лимита (7 ГБ) свопа и контейнер уходит в трэшинг вместо чистого OOM-kill + restart
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - stack-net
+
+  open-webui:
+    # Локальная сборка производного образа (см. ./webui-branding).
+    # База пиннится по дайджесту внутри webui-branding/Dockerfile
+    # (ARG OPENWEBUI_BASE) — :main это rolling-тег, он переезжает.
+    # Обновление базового образа — см. RESTORE_WEBUI.md, раздел
+    # «Как обновить базовый образ».
+    build:
+      context: ./webui-branding
+    image: esmien/webui:local
+    container_name: open-webui
+    restart: always
+    environment:
+      WEBUI_NAME: "Esmien AI"     # правку суффикса " (Open WebUI)" делает Dockerfile в webui-branding
+      ENABLE_ADMIN_CHAT_ACCESS: ${ENABLE_ADMIN_CHAT_ACCESS}
+      DATABASE_URL: postgresql://webui:${WEBUI_DB_PASSWORD}@host.docker.internal:5432/webui_db
+      VECTOR_DB: pgvector
+      PGVECTOR_DB_URL: postgresql://webui:${WEBUI_DB_PASSWORD}@host.docker.internal:5432/webui_db
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY}
+      OPENAI_API_BASE_URL: http://litellm:4000/v1
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      ENABLE_SIGNUP: "False"
+      WEBUI_URL: ${WEBUI_URL}
+      ENABLE_RAG_WEB_SEARCH: "True"
+      RAG_WEB_SEARCH_ENGINE: "searxng"
+      SEARXNG_QUERY_URL: "http://searxng:8080/search?q=<query>"
+      # glibc по умолчанию держит до 8*nproc (здесь 32) malloc-арен по 64 МиБ
+      # каждая; при 38 потоках они залипали в RSS (~1.5 ГБ) и не возвращались ОС.
+      MALLOC_ARENA_MAX: "2"
+    ports:
+      - "127.0.0.1:8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /home/ai_service/webui_data:/app/backend/data
+    depends_on:
+      litellm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5          # исключение: первый старт с миграциями БД бывает долгим
+      start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - stack-net
+
+  open-terminal:
+    image: ghcr.io/open-webui/open-terminal:latest
+    container_name: open-terminal
+    restart: always
+    mem_limit: 2g           # потолок на случай runaway; в норме heap ~2 ГБ под конец дня
+    memswap_limit: 2g       # без до-свапа: 2× лимита свопа → трэшинг вместо чистого OOM-kill + restart
+    user: "0:0"
+    command: ["run", "--cwd", "/mnt/host"]
+    volumes:
+      - /:/mnt/host
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/ai_service/webui_data:/home/ai_service/webui_data
+      # Пробрасывается вручную (open-terminal-config не входит в пакет):
+      - /root/open-terminal-config/.bashrc:/root/.bashrc
+      - /root/open-terminal-config/chroot-host:/usr/local/bin/chroot-host
+    environment:
+      OPEN_TERMINAL_API_KEY: ${OPEN_TERMINAL_API_KEY}
+      # Возврат памяти ОС: glibc по умолчанию держит освобождённые арены и heap только растёт.
+      # Порог trim 128 КБ + mmap для крупных блоков + 2 арены вместо N по числу потоков.
+      MALLOC_TRIM_THRESHOLD_: "131072"
+      MALLOC_MMAP_THRESHOLD_: "131072"
+      MALLOC_ARENA_MAX: "2"
+      PYTHONMALLOC: "malloc"
+    healthcheck:
+      # /health отдаёт 200; корень "/" отдаёт 404, поэтому проверяем именно /health
+      test: ["CMD-SHELL", "curl -fsS -m 4 http://127.0.0.1:8000/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - stack-net
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: always
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET_KEY}
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - ./searxng/limiter.toml:/etc/searxng/limiter.toml:ro
+      # Кастомные движки (персистентность: живут на хосте, не теряются при пересоздании)
+      - ./searxng/engines/bing_direct.py:/usr/local/searxng/searx/engines/bing_direct.py:ro
+      - searxng_data:/var/cache/searxng
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- -T 4 http://127.0.0.1:8080/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - stack-net
+
+  litellm-redis:
+    image: redis:7-alpine
+    container_name: litellm-redis
+    restart: always
+    command: ["redis-server", "--requirepass", "${LITELLM_REDIS_PASSWORD}", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction", "--save", "", "--appendonly", "no"]
+    environment:
+      LITELLM_REDIS_PASSWORD: ${LITELLM_REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$LITELLM_REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - stack-net
+
+volumes:
+  searxng_data:
+
+networks:
+  stack-net:
+    external: true

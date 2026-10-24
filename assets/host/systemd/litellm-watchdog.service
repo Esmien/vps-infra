@@ -1,0 +1,10 @@
+[Unit]
+Description=LiteLLM gateway watchdog (liveness + error-rate probe, Telegram alert)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /usr/local/bin/litellm-watchdog.py
+Nice=5

@@ -1,0 +1,16 @@
+[Unit]
+Description=Open WebUI pending signup approver (Telegram)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/owui-signup-approver.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=append:/var/log/owui-signup-approver.log
+StandardError=append:/var/log/owui-signup-approver.log
+
+[Install]
+WantedBy=multi-user.target

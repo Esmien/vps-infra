@@ -1,0 +1,10 @@
+[Unit]
+Description=Docker incident detector — wakes the Hermes agent to diagnose container failures
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /usr/local/bin/docker-incident-detector.py
+Nice=5

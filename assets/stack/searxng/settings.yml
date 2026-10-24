@@ -1,0 +1,126 @@
+use_default_settings:
+  engines:
+    # Оставляем только те движки, что реально отдают результаты с этого IP.
+    # Всё остальное (duckduckgo, bing, google, startpage, wikipedia, pypi, ...)
+    # вырезается из дефолтов: иначе они шумят, жрут latency и ловят баны.
+    keep_only:
+      - google cse
+      - brave
+      - seznam
+      - mwmbl
+      - yahoo
+      - stackexchange
+      - github
+      - arxiv
+      - docker hub
+
+server:
+  secret_key: ""
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "ru"
+  formats:
+    - html
+    - json
+
+ui:
+  default_locale: "ru"
+
+# Tor-прокси searxng больше не использует: все боевые движки ходят напрямую
+# (проверено 2026-10-24). Секция outgoing.networks убрана намеренно.
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 20.0
+
+engines:
+  # --- КРИТИЧНО: proxies: {} у каждого движка, network: НЕ использовать ---
+  # В searxng 2026.10 бан движка (SuspendedStatus) лежит в словаре по ключу
+  # id(Network): все движки с одинаковым network делят ОДИН бан-статус.
+  # Один 403/CAPTCHA любого движка выключал на 3 минуты весь network — из-за
+  # этого живым оставался только yahoo. Пустой proxies: {} заставляет searxng
+  # создать персональный Network на каждый движок -> баны изолированы.
+
+  # --- general: уходит в Open WebUI ---
+  - name: google cse
+    engine: google_cse
+    shortcut: goc
+    categories: [general]
+    disabled: false
+    inactive: false
+    proxies: {}
+    weight: 1.6
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    categories: [general]
+    disabled: false
+    inactive: false
+    proxies: {}
+    weight: 1.2
+
+  - name: stackexchange
+    engine: stackexchange
+    shortcut: se
+    categories: [general]
+    disabled: false
+    inactive: false
+    proxies: {}
+    weight: 1.2
+
+  - name: github
+    engine: github
+    shortcut: gh
+    categories: [general]
+    disabled: false
+    inactive: false
+    proxies: {}
+    weight: 1.0
+
+  - name: seznam
+    engine: seznam
+    shortcut: szn
+    categories: [general]
+    disabled: false
+    inactive: false
+    proxies: {}
+    weight: 1.0
+
+  - name: yahoo
+    engine: yahoo
+    shortcut: yh
+    categories: [general]
+    disabled: false
+    inactive: false
+    proxies: {}
+    weight: 0.9
+
+  - name: mwmbl
+    engine: mwmbl
+    shortcut: mwm
+    categories: [general]
+    disabled: false
+    inactive: false
+    proxies: {}
+    weight: 0.5
+
+  # --- нишевые: в general не подмешиваются ---
+  - name: arxiv
+    engine: arxiv
+    shortcut: arx
+    categories: [science]
+    disabled: false
+    inactive: false
+    proxies: {}
+    weight: 1.0
+
+  - name: docker hub
+    engine: docker_hub
+    shortcut: dh
+    categories: [it]
+    disabled: false
+    inactive: false
+    proxies: {}
+    weight: 1.0

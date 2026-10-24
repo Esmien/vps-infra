@@ -1,0 +1,7 @@
+[Unit]
+Description=Open WebUI: retention for generated_images folder (keep last 14 days)
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/webui-generated-images-retention.sh

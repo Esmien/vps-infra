@@ -1,0 +1,13 @@
+[Unit]
+Description=Snapshot of Hermes agent state (config, skills, runbooks) to private git repo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/hermes-state-backup.sh
+TimeoutStartSec=900
+Nice=10
+StandardOutput=journal
+StandardError=journal

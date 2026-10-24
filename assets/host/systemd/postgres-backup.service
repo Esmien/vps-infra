@@ -1,0 +1,13 @@
+[Unit]
+Description=PostgreSQL databases backup (webui_db + litellm_db)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=ai_service
+ExecStart=/home/ai_service/ai-stack/ai/backup-databases.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

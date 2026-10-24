@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly open-terminal restart at 07:40 MSK (04:40 UTC)
+
+[Timer]
+OnCalendar=*-*-* 04:40:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

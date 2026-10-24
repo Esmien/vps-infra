@@ -1,0 +1,12 @@
+[Unit]
+Description=Guard PostgreSQL 5432 from external access
+After=ufw.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/fw-guard-postgres.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

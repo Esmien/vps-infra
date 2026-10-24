@@ -1,0 +1,11 @@
+[Unit]
+Description=SearXNG quality probe (real search, not just healthcheck)
+Documentation=file:///home/ai_service/ai-stack/runbook-containers.md
+After=docker.service searxng.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/bin/searxng-quality-check.py
+TimeoutStartSec=300
+Nice=10

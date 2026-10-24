@@ -1,0 +1,8 @@
+[Unit]
+Description=Docker incident detector liveness check
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/bin/bash /usr/local/bin/docker-detector-liveness.sh
+Nice=10

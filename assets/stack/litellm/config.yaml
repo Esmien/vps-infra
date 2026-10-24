@@ -1,0 +1,381 @@
+# ~/.litellm.config.yaml
+
+# Конфигурационный файл для ротации ключей с лимитами
+
+# Запуск прокси (запускается на http://localhost:4000):
+# 1. tmux new -s litellm
+# 2. litellm --config ~/.litellm.config.yaml
+# 3. Ctrl+B -> D
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  forward_client_headers_to_llm_api: true
+  # Кто стоит перед LiteLLM: только локальный nginx (127.0.0.1:4000 -> docker-proxy).
+  # Нужно, чтобы login-throttle считал лимиты по РЕАЛЬНОМУ IP клиента из X-Forwarded-For,
+  # а не по адресу прокси. Без этого все попытки входа из интернета идут одним ведром.
+  # Намеренно НЕ 172.18.0.0/16: иначе любой контейнер stack-net мог бы подделать XFF.
+  trusted_proxy_ranges:
+    - "127.0.0.1/32"
+    - "172.18.0.1/32"
+
+# Настрйоки ротации
+router_settings:
+  allowed_fails: 2        # Исключить ключ после первой ошибки 429
+  cooldown_time: 60      # Заморозка ключа на 1 минуту
+  routing_strategy: simple-shuffle # ротирует ключи активной модели, пока не исчерпаются, потом падает на fallback-модель
+
+#litellm_settings:
+#  model_group_settings:
+#    forward_client_headers_to_llm_api:
+#      - "*"
+
+# router_settings:
+#   model_group_affinity_config:
+#     "sniff.chat.opencode/claude-haiku-5.5":
+#       - session_affinity
+
+# model_list:
+  # -------------------------------------------------------------------
+  # Template ALL Keys
+#   - model_name:
+#     litellm_params:
+#       model:
+#       api_key: "sk-tkn-24d3f99f-2782-4542-947c-b7d0837b1f23"
+#       api_base: "https://api.tokenator.top/v1"
+#     model_info:
+#       max_input_tokens:
+#       max_output_tokens:
+#       input_cost_per_token:
+#       output_cost_per_token:
+#       supports_vision: true
+#       supports_function_calling: true
+#       supports_system_messages: true
+#
+#
+#   - model_name:
+#     litellm_params:
+#       model:
+#       api_key: "sk-tkn-3b891cac-51f0-4d89-b158-9ef203edc984"
+#       api_base: "https://api.tokenator.top/v1"
+#     model_info:
+#       max_input_tokens:
+#       max_output_tokens:
+#       input_cost_per_token:
+#       output_cost_per_token:
+#       supports_vision: true
+#       supports_function_calling: true
+#       supports_system_messages: true
+#
+#   - model_name:
+#     litellm_params:
+#       model:
+#       api_key: "sk-tkn-0626feed-3171-46b7-9bee-2c196195a2e3"
+#       api_base: "https://api.tokenator.top/v1"
+#     model_info:
+#       max_input_tokens:
+#       max_output_tokens:
+#       input_cost_per_token:
+#       output_cost_per_token:
+#       supports_vision: true
+#       supports_function_calling: true
+#       supports_system_messages: true
+#
+#   - model_name:
+#     litellm_params:
+#       model:
+#       api_key: "sk-tkn-6cb8c511-31a0-4a13-84ac-8444c7603e39"
+#       api_base: "https://api.tokenator.top/v1"
+#     model_info:
+#       max_input_tokens:
+#       max_output_tokens:
+#       input_cost_per_token:
+#       output_cost_per_token:
+#       supports_vision: true
+#       supports_function_calling: true
+#       supports_system_messages: true
+  # -------------------------------------------------------------------
+
+  # -------------------------------------------------------------------
+  # Claude Opus 5.5 Free
+  # - model_name: opus
+  #   litellm_params:
+  #     model: openai/free-claude-opus-5.5
+  #     api_key: "sk-tkn-24d3f99f-2782-4542-947c-b7d0837b1f23"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1000000
+  #     max_output_tokens: 128000
+  #     input_cost_per_token: 0.000004
+  #     output_cost_per_token: 0.000020
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+
+  # - model_name: opus
+  #   litellm_params:
+  #     model: openai/free-claude-opus-5.5
+  #     api_key: "sk-tkn-3b891cac-51f0-4d89-b158-9ef203edc984"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1000000
+  #     max_output_tokens: 128000
+  #     input_cost_per_token: 0.000004
+  #     output_cost_per_token: 0.000020
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+
+  # - model_name: opus
+  #   litellm_params:
+  #     model: openai/free-claude-opus-5.5
+  #     api_key: "sk-tkn-0626feed-3171-46b7-9bee-2c196195a2e3"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1000000
+  #     max_output_tokens: 128000
+  #     input_cost_per_token: 0.000004
+  #     output_cost_per_token: 0.000020
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+
+  # - model_name: opus
+  #   litellm_params:
+  #     model: openai/free-claude-opus-5.5
+  #     api_key: "sk-tkn-6cb8c511-31a0-4a13-84ac-8444c7603e39"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1000000
+  #     max_output_tokens: 128000
+  #     input_cost_per_token: 0.000004
+  #     output_cost_per_token: 0.000020
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+  # -------------------------------------------------------------------
+
+  # -------------------------------------------------------------------
+  # GPT-6 Astra Free
+  # - model_name: astra
+  #   litellm_params:
+  #     model: openai/free-gpt-6-astra
+  #     api_key: "sk-tkn-24d3f99f-2782-4542-947c-b7d0837b1f23"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1050000
+  #     max_output_tokens: 128000
+  #     input_cost_per_token: 0.000010
+  #     output_cost_per_token: 0.000050
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+
+  # - model_name: astra
+  #   litellm_params:
+  #     model: openai/free-gpt-6-astra
+  #     api_key: "sk-tkn-3b891cac-51f0-4d89-b158-9ef203edc984"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1050000
+  #     max_output_tokens: 128000
+  #     input_cost_per_token: 0.000010
+  #     output_cost_per_token: 0.000050
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+
+  # - model_name: astra
+  #   litellm_params:
+  #     model: openai/free-gpt-6-astra
+  #     api_key: "sk-tkn-0626feed-3171-46b7-9bee-2c196195a2e3"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1050000
+  #     max_output_tokens: 128000
+  #     input_cost_per_token: 0.000010
+  #     output_cost_per_token: 0.000050
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+
+  # - model_name: astra
+  #   litellm_params:
+  #     model: openai/free-gpt-6-astra
+  #     api_key: "sk-tkn-6cb8c511-31a0-4a13-84ac-8444c7603e39"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1050000
+  #     max_output_tokens: 128000
+  #     input_cost_per_token: 0.000010
+  #     output_cost_per_token: 0.000050
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+  # -------------------------------------------------------------------
+
+  # -------------------------------------------------------------------
+  # Google Gemini 3.8 Flash Free
+  # - model_name: gemini_free
+  #   litellm_params:
+  #     model: openai/free-gemini-3.8-flash
+  #     api_key: "sk-tkn-24d3f99f-2782-4542-947c-b7d0837b1f23"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1048576
+  #     max_output_tokens: 65536
+  #     input_cost_per_token: 0.00000075
+  #     output_cost_per_token: 0.00000375
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+
+  # - model_name: gemini_free
+  #   litellm_params:
+  #     model: openai/free-gemini-3.8-flash
+  #     api_key: "sk-tkn-3b891cac-51f0-4d89-b158-9ef203edc984"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1048576
+  #     max_output_tokens: 65536
+  #     input_cost_per_token: 0.00000075
+  #     output_cost_per_token: 0.00000375
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+
+  # - model_name: gemini_free
+  #   litellm_params:
+  #     model: openai/free-gemini-3.8-flash
+  #     api_key: "sk-tkn-0626feed-3171-46b7-9bee-2c196195a2e3"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1048576
+  #     max_output_tokens: 65536
+  #     input_cost_per_token: 0.00000075
+  #     output_cost_per_token: 0.00000375
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+
+  # - model_name: gemini_free
+  #   litellm_params:
+  #     model: openai/free-gemini-3.8-flash
+  #     api_key: "sk-tkn-6cb8c511-31a0-4a13-84ac-8444c7603e39"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1048576
+  #     max_output_tokens: 65536
+  #     input_cost_per_token: 0.00000075
+  #     output_cost_per_token: 0.00000375
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+  # -------------------------------------------------------------------
+
+  # -------------------------------------------------------------------
+  # GLM 5.3 Flash Free
+  # - model_name: glm_free
+  #   litellm_params:
+  #     model: openai/free-glm-5.3-flash
+  #     api_key: "sk-tkn-24d3f99f-2782-4542-947c-b7d0837b1f23"
+  #     api_base: "https://api.tokenator.top/v1"
+
+  # - model_name: glm_free
+  #   litellm_params:
+  #     model: openai/free-glm-5.3-flash
+  #     api_key: "sk-tkn-3b891cac-51f0-4d89-b158-9ef203edc984"
+  #     api_base: "https://api.tokenator.top/v1"
+
+  # - model_name: glm_free
+  #   litellm_params:
+  #     model: openai/free-glm-5.3-flash
+  #     api_key: "sk-tkn-0626feed-3171-46b7-9bee-2c196195a2e3"
+  #     api_base: "https://api.tokenator.top/v1"
+
+  # - model_name: glm_free
+  #   litellm_params:
+  #     model: openai/free-glm-5.3-flash
+  #     api_key: "sk-tkn-6cb8c511-31a0-4a13-84ac-8444c7603e39"
+  #     api_base: "https://api.tokenator.top/v1"
+  # -------------------------------------------------------------------
+
+  # -------------------------------------------------------------------
+  # MiniMax M3.1 flash
+  # - model_name: minimax
+  #   litellm_params:
+  #     model: openai/free-minimax-m3.1-flash
+  #     api_key: "sk-tkn-24d3f99f-2782-4542-947c-b7d0837b1f23"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1048576
+  #     max_output_tokens: 262144
+  #     input_cost_per_token: 0.00000023
+  #     output_cost_per_token: 0.00000096
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+
+  # - model_name: minimax
+  #   litellm_params:
+  #     model: openai/free-minimax-m3.1-flash
+  #     api_key: "sk-tkn-3b891cac-51f0-4d89-b158-9ef203edc984"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1048576
+  #     max_output_tokens: 262144
+  #     input_cost_per_token: 0.00000023
+  #     output_cost_per_token: 0.00000096
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+
+
+  # - model_name: minimax
+  #   litellm_params:
+  #     model: openai/free-minimax-m3.1-flash
+  #     api_key: "sk-tkn-0626feed-3171-46b7-9bee-2c196195a2e3"
+  #     api_base: "https://api.tokenator.top/v1"
+
+  # - model_name: minimax
+  #   litellm_params:
+  #     model: openai/free-minimax-m3.1-flash
+  #     api_key: "sk-tkn-6cb8c511-31a0-4a13-84ac-8444c7603e39"
+  #     api_base: "https://api.tokenator.top/v1"
+  #   model_info:
+  #     max_input_tokens: 1048576
+  #     max_output_tokens: 262144
+  #     input_cost_per_token: 0.00000023
+  #     output_cost_per_token: 0.00000096
+  #     supports_vision: true
+  #     supports_function_calling: true
+  #     supports_system_messages: true
+  # -------------------------------------------------------------------
+
+  # -------------------------------------------------------------------
+  # Google Gemini 3.1 Pro (Paid)
+  # - model_name: gemini_pro
+  #   litellm_params:
+  #     model: openai/gemini-3.1-pro-preview
+  #     api_key: "sk-tkn-24d3f99f-2782-4542-947c-b7d0837b1f23"
+  #     api_base: "https://api.tokenator.top/v1"
+
+  # - model_name: gemini_pro
+  #   litellm_params:
+  #     model: openai/gemini-3.1-pro-preview
+  #     api_key: "sk-tkn-3b891cac-51f0-4d89-b158-9ef203edc984"
+  #     api_base: "https://api.tokenator.top/v1"
+
+  # - model_name: gemini_pro
+  #   litellm_params:
+  #     model: openai/gemini-3.1-pro-preview
+  #     api_key: "sk-tkn-0626feed-3171-46b7-9bee-2c196195a2e3"
+  #     api_base: "https://api.tokenator.top/v1"
+
+  # - model_name: gemini_pro
+  #   litellm_params:
+  #     model: openai/gemini-3.1-pro-preview
+  #     api_key: "sk-tkn-6cb8c511-31a0-4a13-84ac-8444c7603e39"
+  #     api_base: "https://api.tokenator.top/v1"
+  # -------------------------------------------------------------------

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Hermes state snapshot at 05:30 MSK (02:30 UTC), same schedule as postgres-backup.timer
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

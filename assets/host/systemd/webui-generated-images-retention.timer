@@ -1,0 +1,10 @@
+[Unit]
+Description=Open WebUI: daily generated_images retention run
+
+[Timer]
+OnCalendar=*-*-* 04:15:00 UTC
+Persistent=true
+Unit=webui-generated-images-retention.service
+
+[Install]
+WantedBy=timers.target

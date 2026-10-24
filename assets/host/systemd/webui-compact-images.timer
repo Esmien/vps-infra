@@ -1,0 +1,10 @@
+[Unit]
+Description=Open WebUI: daily base64 image compaction
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 UTC
+Persistent=true
+Unit=webui-compact-images.service
+
+[Install]
+WantedBy=timers.target

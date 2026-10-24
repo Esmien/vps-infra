@@ -1,0 +1,10 @@
+[Unit]
+Description=LiteLLM: daily spend-log retention run
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 UTC
+Persistent=true
+Unit=litellm-spend-retention.service
+
+[Install]
+WantedBy=timers.target

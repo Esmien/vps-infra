@@ -1,0 +1,13 @@
+[Unit]
+Description=Telegram report for PostgreSQL backups (files + daily digest)
+After=postgres-backup.service
+
+[Service]
+Type=oneshot
+User=ai_service
+ExecStart=/usr/bin/python3 /home/ai_service/notifications/monitor.py backup
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

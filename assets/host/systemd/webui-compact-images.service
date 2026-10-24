@@ -1,0 +1,7 @@
+[Unit]
+Description=Open WebUI: move base64 chat images into file storage
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/webui-compact-images.sh

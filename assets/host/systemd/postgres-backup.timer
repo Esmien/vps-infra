@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily PostgreSQL backup at 05:30 MSK (02:30 UTC)
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

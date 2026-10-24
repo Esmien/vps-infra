@@ -1,0 +1,7 @@
+[Unit]
+Description=LiteLLM: retention for detail spend logs (keep daily aggregates)
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/litellm-spend-retention.sh

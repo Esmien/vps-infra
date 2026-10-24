@@ -1,0 +1,11 @@
+[Unit]
+Description=Docker container auto-recovery timer (every 60s)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=10s
+Unit=docker-autorecover.service
+
+[Install]
+WantedBy=timers.target

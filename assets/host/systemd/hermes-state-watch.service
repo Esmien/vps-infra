@@ -1,0 +1,17 @@
+[Unit]
+Description=Commit Hermes state to GitHub on change (inotify watcher)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/hermes-state-watch.sh
+Restart=always
+RestartSec=10
+Nice=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

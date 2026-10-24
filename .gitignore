@@ -1,0 +1,16 @@
+# секреты и локальные данные
+.env
+*.env
+!.env.example
+*.dump
+*.tar.gz
+*.log
+bundle*
+_state_snapshot/
+out/
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.bak.*
+.DS_Store

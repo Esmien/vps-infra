@@ -1,0 +1,16 @@
+[Unit]
+Description=Notify Telegram that the server rebooted and Hermes is online
+Documentation=file:/usr/local/bin/hermes-boot-notify.sh
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hermes-boot-notify.sh
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

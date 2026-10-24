@@ -1,0 +1,11 @@
+[Unit]
+Description=LiteLLM watchdog timer (every 60s)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=litellm-watchdog.service
+
+[Install]
+WantedBy=timers.target
