@@ -205,7 +205,7 @@ HOST_BIN_SCRIPTS = [
     "hermes-state-watch.sh",
 ]
 
-BACKEND_PORTS = {"8080": "ai", "4000": "llm", "8000": "terminal"}
+BACKEND_PORTS = {"8080": "ai", "4000": "llm"}
 
 
 class Installer:
@@ -349,13 +349,14 @@ class Installer:
             if owner:
                 shutil.chown(path, owner, owner)
 
-    def write_file(self, path: Path, content: str, mode: int = 0o644, owner: str | None = None) -> bool:
+    def write_file(self, path: Path, content, mode: int = 0o644, owner: str | None = None) -> bool:
         """Атомарно пишет файл, если содержимое изменилось. True = записан."""
         if self.check_mode:
             return False
+        blob = content.encode() if isinstance(content, str) else content
         if path.is_file():
             try:
-                if path.read_text() == content:
+                if path.read_bytes() == blob:
                     if owner and not self.dry:
                         try:
                             st = path.stat()
@@ -373,8 +374,8 @@ class Installer:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-")
         try:
-            with os.fdopen(fd, "w") as fh:
-                fh.write(content)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(blob)
             os.chmod(tmp, mode)
             if owner:
                 shutil.chown(tmp, owner, owner)
@@ -386,8 +387,7 @@ class Installer:
         return True
 
     def copy_file(self, src: Path, dst: Path, mode: int = 0o644, owner: str | None = None) -> bool:
-        data = src.read_text(errors="replace")
-        return self.write_file(dst, data, mode=mode, owner=owner)
+        return self.write_file(dst, src.read_bytes(), mode=mode, owner=owner)
 
     def sync_tree(self, src: Path, dst: Path, owner: str, skip: tuple[str, ...] = ()) -> int:
         n = 0
@@ -517,8 +517,10 @@ class Installer:
         cfg["llm_domain"] = self.prompt(
             cfg, "llm_domain", "Домен LiteLLM", default=dom.get("llm", "llm.example.com"), required=True
         )
-        cfg["terminal_domain"] = self.prompt(
-            cfg, "terminal_domain", "Домен open-terminal", default=dom.get("terminal", "bot.example.com"), required=True
+        cfg["extra_domain"] = self.prompt(
+            cfg, "extra_domain", "Доп. домен на open-terminal (можно пусто)",
+            default=cfg.get("extra_domain", ""),
+            hint="Домен bot.* из старой схемы обслуживал бота с музыкой — он вне этого репозитория.",
         )
         email_default = cfg.get("acme_email") or f"admin@{cfg['ai_domain']}"
         cfg["acme_email"] = self.prompt(
@@ -573,7 +575,8 @@ class Installer:
         self.env["WEBUI_URL"] = f"https://{cfg['ai_domain']}"
 
         self.save_config()
-        ok(f"Домены: {cfg['ai_domain']}, {cfg['llm_domain']}, {cfg['terminal_domain']}")
+        domains = ", ".join(d for d in (cfg["ai_domain"], cfg["llm_domain"], cfg.get("extra_domain")) if d)
+        ok(f"Домены: {domains}")
         ok(f"Каталог стека: {self.infra_dir}")
 
     # ── шаги ────────────────────────────────────────────────────────────────
@@ -645,7 +648,8 @@ class Installer:
             self.run(["bash", "-c", "curl -fsSL https://get.docker.com -o /tmp/get-docker.sh && sh /tmp/get-docker.sh"], stream=True, timeout=1800)
             ok("Docker установлен")
         else:
-            ok(f"Docker {self.run(['docker', '--version']).stdout.strip().split()[-1].rstrip(',')}")
+            ver = (self.run(["docker", "--version"]).stdout or "").strip()
+            ok(f"Docker {ver.split()[-1].rstrip(',')}" if ver else "Docker уже установлен")
         self.run(["systemctl", "enable", "--now", "docker"])
 
         # Ротация логов на уровне демона — для контейнеров, созданных без
@@ -675,7 +679,8 @@ class Installer:
             res = self.run(["docker", "compose", "version"], check=False)
             if res.returncode != 0:
                 die("docker compose (v2) недоступен после установки")
-        ok(f"compose {(res.stdout or '').strip().split()[-1]}")
+        cv = (res.stdout or "").strip()
+        ok(f"compose {cv.split()[-1]}" if cv else "compose v2 доступен")
 
     def step_users(self) -> None:
         step(f"Пользователь {AI_USER} и каталоги")
@@ -1002,6 +1007,8 @@ $$;
     def step_migrate(self) -> None:
         step("Миграции LiteLLM")
         self.compose("up", "-d", "litellm-redis", "litellm", stream=True, timeout=1200)
+        if self.dry:
+            return
         deadline = time.time() + 180
         while time.time() < deadline:
             if self.psql_scalar(
@@ -1166,6 +1173,8 @@ GROUP BY end_user ORDER BY total_spend DESC LIMIT 100;
     def step_apps(self) -> None:
         step("Запуск стека")
         self.compose("up", "-d", stream=True, timeout=1800)
+        if self.dry:
+            return
         expected = {
             "open-webui": 240,
             "litellm": 180,
@@ -1347,8 +1356,10 @@ server {{
         sites = {
             self.cfg["ai_domain"]: ("127.0.0.1", 8080),
             self.cfg["llm_domain"]: ("127.0.0.1", 4000),
-            self.cfg["terminal_domain"]: ("127.0.0.1", 8000),
         }
+        extra = (self.cfg.get("extra_domain") or "").strip()
+        if extra:
+            sites[extra] = ("127.0.0.1", 8000)
         avail = Path("/etc/nginx/sites-available")
         enabled = Path("/etc/nginx/sites-enabled")
         self.ensure_dir(avail, 0o755)
@@ -1451,14 +1462,20 @@ server {{
             ("litellm", "http://127.0.0.1:4000/health/liveliness"),
             ("open-webui", "http://127.0.0.1:8080/health"),
             ("searxng", "http://127.0.0.1:8081/healthz"),
-            ("open-terminal", "http://127.0.0.1:8000/health"),
         ]
         for name, url in checks:
             res = self.run(["curl", "-fsS", "-m", "8", "-o", "/dev/null", "-w", "%{http_code}", url], check=False)
             print(f"  {C_DIM}·{C_RESET} {name}: HTTP {res.stdout.strip() or 'ERR'}")
+        # open-terminal не публикует порт на хост — проверяем изнутри контейнера.
+        res = self.run(
+            ["docker", "exec", "open-terminal", "curl", "-fsS", "-m", "8", "-o", "/dev/null", "-w", "%{http_code}",
+             "http://127.0.0.1:8000/health"],
+            check=False,
+        )
+        print(f"  {C_DIM}·{C_RESET} open-terminal (в контейнере): HTTP {res.stdout.strip() or 'ERR'}")
 
         if not self.args.skip_tls:
-            for domain in (self.cfg.get("ai_domain"), self.cfg.get("llm_domain"), self.cfg.get("terminal_domain")):
+            for domain in (self.cfg.get("ai_domain"), self.cfg.get("llm_domain"), self.cfg.get("extra_domain")):
                 if not domain:
                     continue
                 res = self.run(
