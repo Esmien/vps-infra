@@ -1258,13 +1258,20 @@ GROUP BY end_user ORDER BY total_spend DESC LIMIT 100;
         self.install_units(units, enable)
         ok(f"юниты включены ({len(enable)} шт.)")
 
-        # Разовый прогон бэкапа, чтобы проверить, что он работает.
+        # Разовый прогон бэкапа, чтобы проверить, что он работает. Если свежий
+        # дамп уже есть (< 1 ч), не гоняем pg_dump повторно на каждом запуске.
         if not self.dry and (self.compose_dir / ".env").is_file():
-            res = self.run(["systemctl", "start", "postgres-backup.service"], check=False, timeout=1800)
-            if res.returncode == 0:
-                ok("тестовый бэкап БД выполнен")
+            dumps = list(self.dump_dir.glob("*.dump"))
+            fresh = max(dumps, key=lambda p: p.stat().st_mtime, default=None)
+            age = (time.time() - fresh.stat().st_mtime) if fresh else 1e9
+            if age < 3600:
+                info("свежий бэкап БД уже есть — пропускаю")
             else:
-                warn("тестовый бэкап не удался — см. journalctl -u postgres-backup")
+                res = self.run(["systemctl", "start", "postgres-backup.service"], check=False, timeout=1800)
+                if res.returncode == 0:
+                    ok("тестовый бэкап БД выполнен")
+                else:
+                    warn("тестовый бэкап не удался — см. journalctl -u postgres-backup")
 
     # ── TLS ─────────────────────────────────────────────────────────────────
 
