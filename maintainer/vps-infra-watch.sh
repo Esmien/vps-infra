@@ -31,7 +31,7 @@ run_push() {
     local why="${1:-changes detected}"
     log "$why → push"
     local rc=0
-    "$PUSH" >>"$LOG" 2>&1 || rc=$?
+    "$PUSH" >/dev/null 2>&1 || rc=$?   # push логирует сам, без дублей
     if [[ "$rc" -eq 0 ]]; then
         log "push ok"
         retry_at=0
