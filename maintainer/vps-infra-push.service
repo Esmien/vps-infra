@@ -1,0 +1,13 @@
+[Unit]
+Description=vps-infra: commit and push repository changes (one-shot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/vps-infra-push.sh
+Nice=10
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=600
