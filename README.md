@@ -83,6 +83,27 @@ images, migrate, restore, apps, notifications, units, tls, verify, hermes`.
 * vhost'ы и юниты пишутся только при изменении, таймеры включаются повторно
   безвредно.
 
+## Авто-коммит и пуш (как у hermes-state)
+
+Рабочая копия `/root/vps-infra` — источник правды. Изменения уезжают в GitHub
+сами, по факту правки, без таймера:
+
+- `vps-infra-watch.service` — inotify на каталог, debounce 90 с (max 15 мин),
+  старт сервиса = догоняющий пуш;
+- `vps-infra-push.sh` — `maintainer/sync_assets.py` подтягивает живые файлы
+  хоста в `assets/` (без `.env`, `__pycache__`, тестов и снапшотов), затем
+  проверяет, что `install.py` компилируется, `bootstrap.sh` проходит `bash -n`,
+  compose валидируется на фиктивных секретах;
+- секрет-скан: при находке (`ghp_`, `sk-`, PEM, bot-token) коммит отменяется;
+- коммит создаётся только при реальных изменениях; push догоняет origin,
+  при сбое — ретрай с бэкоффом и алерт в Telegram не чаще раза в 30 минут.
+
+```bash
+systemctl status vps-infra-watch
+systemctl start vps-infra-push      # принудительный прогон
+tail -n 20 /var/log/vps-infra-autopush.log
+```
+
 ## Раскладка
 
 ```
@@ -94,6 +115,7 @@ assets/host/bin/            скрипты в /usr/local/bin
 assets/host/systemd/        юниты и таймеры
 assets/host/open-terminal-config/  .bashrc и chroot-host для open-terminal
 assets/templates/           шаблоны .env
+maintainer/                 авто-коммит/пуш репозитория (systemd + скрипты)
 ```
 
 Стек разворачивается в `/home/ai_service/ai-stack` (меняется `--infra-dir`),
