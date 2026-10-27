@@ -736,7 +736,6 @@ REPORT_DB_ORDER = ("webui_db", "litellm_db")
 # actually usable. Dumps Telegram receives split into parts are re-split and re-joined
 # first, so the verified artifact is the same byte stream the recipient gets.
 VERIFY_DB_PREFIX = "verify_restore_"
-VERIFY_SPLIT_DBS = ("webui_db",)
 VERIFY_TIMEOUT_SECONDS = 300
 # pgvector index builds need more than the 64 MB default of maintenance_work_mem: restoring
 # webui_db failed with "memory required is 65 MB". Set it for the restore session only.
@@ -1008,6 +1007,28 @@ def collect_backup_groups() -> tuple[dict[str, list[Path]], list[str], list[Path
     return groups, order, files
 
 
+def registry_sent_parts() -> dict[str, dict]:
+    """Что реально ушло в файл-бот: имя дампа → число частей и суммарный размер."""
+    path = tg_registry_path()
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    out: dict[str, dict] = {}
+    for item in data.get("sets", []) if isinstance(data, dict) else []:
+        if not isinstance(item, dict) or not item.get("dump"):
+            continue
+        parts = item.get("parts") or []
+        out[str(item["dump"])] = {
+            "parts": len(parts),
+            "total": sum(int(part.get("size") or 0) for part in parts),
+            "complete": bool(item.get("complete", True)),
+        }
+    return out
+
+
 def build_backup_digest(
     groups: dict[str, list[Path]], order: list[str], files: list[Path]
 ) -> str:
@@ -1031,6 +1052,25 @@ def build_backup_digest(
         lines.append("")
     total_size = sum(path.stat().st_size for path in files)
     lines.append(f"Общий размер: {format_size(total_size)}")
+
+    # Что именно лежит в файл-боте: без этого «в чате 9 файлов» выглядит как мусор,
+    # а не как 2 дампа, порезанных на части для восстановления.
+    sent = registry_sent_parts()
+    lines.append("")
+    lines.append("В файл-боте (реестр file_id):")
+    for name in order:
+        newest = groups[name][0]
+        info = sent.get(newest.name)
+        if not info:
+            lines.append(f"  - {name}: не отправлялся")
+            continue
+        count = max(int(info["parts"]), 1)
+        each = format_size(int(info["total"]) // count)
+        state = "все части доставлены" if info["complete"] else "⚠️ есть недоставленные части"
+        lines.append(
+            f"  - {name}: {info['parts']} шт. по ~{each} ({state}), "
+            f"sha256 {sha256_of(newest)[:12]}…"
+        )
     return "\n".join(lines)
 
 
@@ -1086,7 +1126,9 @@ def _restore_into_temp_db(db_name: str, dump: Path) -> tuple[bool, str]:
     byte stream that arrives in Telegram. The throwaway DB is always dropped.
     """
     temp_db = _verify_temp_db_name(db_name)
-    split = db_name in VERIFY_SPLIT_DBS and dump.stat().st_size > TG_DOC_LIMIT
+    # Проверяем ровно тот байтовый поток, который получатель склеит из частей в Telegram:
+    # любой дамп больше лимита уходит частями, значит и здесь его надо резать так же.
+    split = dump.stat().st_size > TG_DOC_LIMIT
     # Same count the recipient's split produces, so the verified byte stream matches Telegram.
     parts_count = split_part_count(dump.stat().st_size) if split else 1
     started = time.monotonic()
