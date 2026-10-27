@@ -94,6 +94,10 @@ def send_telegram(
         raise MonitorError(f"Не удалось отправить сообщение в Telegram: {safe_error}") from exc
     if not result.get("ok"):
         raise MonitorError(f"Telegram Bot API вернул ошибку: {result}")
+    # Явный след доставки в журнале юнита: «сообщение ушло» должно быть проверяемым,
+    # а не выводиться из exit code.
+    sent = (result.get("result") or {}).get("message_id")
+    print(f"monitor: sent message_id={sent} chat={chat_id} chars={len(text)}", flush=True)
 
 
 def send_long_message(
