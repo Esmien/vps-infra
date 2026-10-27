@@ -35,12 +35,15 @@ WATCH=(
     /etc/logrotate.d/hermes-state-backup
     /home/ai_service/ai-stack/runbook-containers.md
     /home/ai_service/ai-stack/ai/backup-databases.sh
-    /home/ai_service/ai-stack/backups/postgres/.tg-registry.json
+    # Каталог, а не файл: реестра может ещё не быть при старте, а inotifywait на
+    # отсутствующем пути падает с rc=1 и не видит момент его создания.
+    /home/ai_service/ai-stack/backups/postgres
 )
 # .hub — 51 МБ клон хаба, в снапшот не идёт; .git/__pycache__/локи — шум
 # cron deliveries.db-wal пишется постоянно и сбрасывал бы debounce бесконечно;
 # поэтому в cron следим только за jobs.json, а sqlite-мусор режем по маске
-EXCLUDE='(\.hub/|\.git/|__pycache__/|\.locks/|\.lock$|\.tmp$|hermes-state/repo|\.curator_backups/|-wal$|-shm$|\.db$|\.usage\.json)'
+# дампы и backup.log меняются при каждом бэкапе и в снапшот не входят
+EXCLUDE='(\.hub/|\.git/|__pycache__/|\.locks/|\.lock$|\.tmp$|hermes-state/repo|\.curator_backups/|-wal$|-shm$|\.db$|\.usage\.json|\.dump$|\.dump\.part_|backup\.log$)'
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >>"$LOG"; }
 

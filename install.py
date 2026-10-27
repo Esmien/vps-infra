@@ -448,6 +448,13 @@ class Installer:
         self.compose_file = self.compose_dir / "docker-compose.yml"
         self.dump_dir = self.infra_dir / "backups" / "postgres"
         self.env = parse_env(self.compose_dir / ".env")
+        # GITHUB_KEY — единственный секрет, который нужен ДО создания .env (шаг fetch:
+        # реестр file_id из hermes-state). Если целимся в другой каталог стека,
+        # добираем его из штатного .env.
+        if not self.env.get("GITHUB_KEY"):
+            fallback = parse_env(DEFAULT_INFRA_DIR / "ai" / ".env")
+            if fallback.get("GITHUB_KEY"):
+                self.env["GITHUB_KEY"] = fallback["GITHUB_KEY"]
         # Маска из install.json не должна возвращаться в .env: токен живёт только в .env.
         tg = self.cfg.get("telegram") or {}
         for key in ("bot_token", "file_bot_token"):
