@@ -99,7 +99,13 @@ def send_telegram(
 def send_long_message(
     text: str, limit: int = 3900, parse_mode: str = "HTML", chat_id: str | None = None
 ) -> None:
-    """Split long notifications below Telegram's 4096-char limit."""
+    """Split long notifications below Telegram's 4096-char limit.
+
+    With `parse_mode="HTML"` chunks must not cut a tag in half: Telegram rejects a chunk
+    whose `<pre>`/`<b>` is left open ("can't parse entities: Can't find end tag"), which is
+    exactly how crash/OOM alerts with long docker logs were lost. Each chunk closes the tags
+    it leaves open and the next chunk reopens them.
+    """
     lines = text.splitlines(keepends=True)
     chunks: list[str] = []
     current = ""
@@ -108,17 +114,53 @@ def send_long_message(
             if current:
                 chunks.append(current)
                 current = ""
-            chunks.append(line[:limit])
-            line = line[limit:]
+            cut = line.rfind(">", 0, limit) + 1 if ">" in line[:limit] else limit
+            chunks.append(line[:cut])
+            line = line[cut:]
         if current and len(current) + len(line) > limit:
             chunks.append(current)
             current = ""
         current += line
     if current:
         chunks.append(current)
+
+    if parse_mode and parse_mode.upper() == "HTML":
+        chunks = _balance_html_chunks(chunks)
     for chunk in chunks:
         send_telegram(chunk, parse_mode=parse_mode, chat_id=chat_id)
         time.sleep(0.1)  # Small delay to avoid Telegram rate limits
+
+
+HTML_TAG_RE = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)[^>]*?(/?)>")
+SELF_CLOSING_TAGS = {"br", "hr"}
+
+
+def _open_tags(text: str) -> list[str]:
+    """Tags left open at the end of `text`, in opening order."""
+    stack: list[str] = []
+    for match in HTML_TAG_RE.finditer(text):
+        closing, name, selfclose = match.group(1), match.group(2).lower(), match.group(3)
+        if name in SELF_CLOSING_TAGS or selfclose:
+            continue
+        if closing:
+            if name in stack:
+                while stack and stack.pop() != name:
+                    pass
+        else:
+            stack.append(name)
+    return stack
+
+
+def _balance_html_chunks(chunks: list[str]) -> list[str]:
+    """Close dangling tags at the end of each chunk and reopen them in the next one."""
+    balanced: list[str] = []
+    pending: list[str] = []
+    for chunk in chunks:
+        body = "".join(f"<{tag}>" for tag in pending) + chunk
+        stack = _open_tags(body)
+        balanced.append(body + "".join(f"</{tag}>" for tag in reversed(stack)))
+        pending = stack
+    return balanced
 
 
 def state_file() -> Path:
