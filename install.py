@@ -84,6 +84,9 @@ HERMES_HOME = Path(os.environ.get("HERMES_HOME", "/root/.hermes"))
 # Bot API отдаёт файл через getFile только до 20 MB — части больше этого скачать нельзя.
 TG_DOWNLOAD_LIMIT = 20 * 1024 * 1024
 TG_API = "https://api.telegram.org"
+# Заглушка, которой save_config маскирует токены в install.json. Обратный путь запрещён:
+# однажды install.py --yes записал её как настоящий токен в notifications/.env и убил ботов.
+MASKED_TOKEN = "__stored_in_notifications_env__"
 
 # ── цвета / вывод ────────────────────────────────────────────────────────────
 
@@ -445,6 +448,11 @@ class Installer:
         self.compose_file = self.compose_dir / "docker-compose.yml"
         self.dump_dir = self.infra_dir / "backups" / "postgres"
         self.env = parse_env(self.compose_dir / ".env")
+        # Маска из install.json не должна возвращаться в .env: токен живёт только в .env.
+        tg = self.cfg.get("telegram") or {}
+        for key in ("bot_token", "file_bot_token"):
+            if tg.get(key) == MASKED_TOKEN:
+                tg[key] = ""
 
     def save_config(self) -> None:
         if self.dry or self.check_mode:
@@ -455,7 +463,7 @@ class Installer:
         tg = safe.get("telegram") or {}
         for key in ("bot_token", "file_bot_token"):
             if tg.get(key):
-                tg[key] = "__stored_in_notifications_env__"
+                tg[key] = MASKED_TOKEN
         data = json.dumps(safe, ensure_ascii=False, indent=2) + "\n"
         fd, tmp = tempfile.mkstemp(dir=str(CONFIG_FILE.parent), prefix=".tmp-")
         with os.fdopen(fd, "w") as fh:
@@ -823,7 +831,7 @@ class Installer:
 
         tg = self.cfg.get("telegram") or {}
         nenv_path = NOTIF_DIR / ".env"
-        if tg.get("bot_token"):
+        if tg.get("bot_token") and tg.get("bot_token") != MASKED_TOKEN:
             t = (TEMPLATES / "notifications.env.tmpl").read_text()
             repl = {
                 "BOT_TOKEN": tg.get("bot_token", ""),
@@ -834,7 +842,11 @@ class Installer:
             for k, v in repl.items():
                 t = t.replace(f"@@{k}@@", v)
             if self.write_file(nenv_path, t, 0o640, "root"):
-                ok("notifications/.env записан")
+                # Юнит ходит от ai_service: без группы сервис не прочитает .env
+                # (ровно так 2026-10-24 отвалились оба бота).
+                if not self.dry:
+                    shutil.chown(nenv_path, "root", AI_USER)
+                ok("notifications/.env записан (0640 root:ai_service)")
             else:
                 ok("notifications/.env без изменений")
         else:
@@ -1125,7 +1137,7 @@ class Installer:
             pass
         ok(f"{dump_name}: {size / 1024**2:.1f} MB, sha256 ok → {target}")
 
-    def step_fetch_bot(self) -> None:
+    def step_fetch(self) -> None:
         step("Дампы из Telegram-бота")
         if not self.bot_restore:
             info("выключено (--from-bot чтобы включить)")
@@ -1133,6 +1145,11 @@ class Installer:
         token = self.tg_token or parse_env(NOTIF_DIR / ".env").get("FILE_BOT_TOKEN", "")
         if not token:
             die("нет токена файл-бота: задайте --tg-token или notifications/.env")
+        if token == MASKED_TOKEN or not re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", token):
+            die(
+                "токен не похож на токен Telegram-бота (ожидается «123456:AA…»). "
+                f"Проверьте FILE_BOT_TOKEN в {NOTIF_DIR / '.env'} — возможно, там заглушка"
+            )
 
         registry = self.load_tg_registry()
         entries = self.latest_registry_sets(registry) if registry else []
@@ -1939,6 +1956,11 @@ server {{
         copied += self.restore_tree(src / "hermes", dst(HERMES_HOME), "root")
         copied += self.restore_tree(src / "host" / "bin", dst("/usr/local/bin"), "root")
         copied += self.restore_tree(src / "host" / "systemd", dst("/etc/systemd/system"), "root")
+        # git не хранит права: возвращаем 0600 файлам, которые в снапшоте писались закрыто.
+        for rel, mode in (("config.yaml", 0o600), ("SOUL.md", 0o600), ("cron/jobs.json", 0o600)):
+            target = dst(HERMES_HOME) / rel
+            if target.is_file():
+                os.chmod(target, mode)
 
         etc_map = {
             "docker-autorecover.conf": "/etc/docker-autorecover.conf",

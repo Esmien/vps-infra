@@ -27,6 +27,24 @@ curl -fsSL …/bootstrap.sh | sudo bash -s -- --yes
 
 ## Переезд на новый сервер
 
+**Одной командой (рекомендуется).** Дампы и состояние Hermes тянутся сами:
+
+```bash
+curl -fsSL …/bootstrap.sh | sudo bash -s -- --from-bot --restore --hermes --restore-hermes
+```
+
+- `--from-bot` — установщик спрашивает токен файл-бота, берёт из реестра `file_id`
+  последний набор дампов, качает части, склеивает и сверяет `sha256`;
+- `--restore-hermes` — из приватного `Esmien/hermes-state` разворачиваются
+  `config.yaml`, `SOUL.md`, memories, skills, cron, `/usr/local/bin`, юниты, `/etc`;
+- секреты (`ai/.env`, `notifications/.env`, `/root/.hermes/.env`) в репозиториях
+  не лежат — установщик спросит их заново (GITHUB_KEY, OpenRouter, токены ботов).
+
+Без флагов те же вопросы задаются интерактивно: «тянуть бэкап из бота?» и
+«развернуть состояние Hermes?».
+
+**Вручную (bundle).**
+
 1. На старом сервере собрать переносимый bundle:
 
    ```bash
@@ -52,6 +70,19 @@ curl -fsSL …/bootstrap.sh | sudo bash -s -- --yes
 4. Прописать DNS-записи доменов на IP нового сервера **до** шага TLS,
    иначе сертификаты не выпустятся (установщик предупредит и оставит HTTP).
 
+### Как бэкап попадает в бота и возвращается назад
+
+- `monitor.py backup` режет каждый дамп на части **≤18 МБ** (лимит `getFile` —
+  20 МБ; с частями по 45 МБ файл из чата скачать уже нельзя) и шлёт их в
+  файл-бот вместе с инструкцией склейки.
+- На каждую часть сохраняется `file_id` в
+  `backups/postgres/.tg-registry.json` (последние 3 набора на базу). Бот не
+  читает свою историю чата, поэтому `file_id` — единственная зацепка.
+- Реестр уезжает в приватный `hermes-state` (`host/backups/tg-registry.json`),
+  откуда его берёт `install.py --from-bot` (нужен `GITHUB_KEY`).
+- Если реестра нет (совсем новый контур, GitHub недоступен) — fallback:
+  переслать файлы бэкапа самому боту, установщик найдёт их через `getUpdates`.
+
 ## Команды
 
 ```bash
@@ -62,11 +93,14 @@ install.py export [--with-data]# bundle для переезда
 install.py --only stack,units,verify
 install.py --skip tls,hermes
 install.py --bundle <path|url> --restore
+install.py --from-bot          # дампы из Telegram-бота (спросит токен)
+install.py --tg-registry <path|url> --tg-token <token>
+install.py --restore-hermes    # состояние Hermes из hermes-state
 install.py --dry-run           # показать план
 ```
 
-Шаги: `preflight, packages, users, stack, secrets, bundle, postgres, network,
-images, migrate, restore, apps, notifications, units, tls, verify, hermes`.
+Шаги: `preflight, packages, users, stack, secrets, bundle, fetch, postgres,
+network, images, migrate, restore, apps, notifications, units, tls, verify, hermes`.
 
 ## Что идемпотентно
 

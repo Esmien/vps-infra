@@ -92,7 +92,7 @@ else
 fi
 
 # ---------------------------------------------------------------- sync payload
-mkdir -p "$REPO_DIR"/{hermes,host/bin,host/systemd,host/etc,host/ai-stack}
+mkdir -p "$REPO_DIR"/{hermes,host/bin,host/systemd,host/etc,host/ai-stack,host/backups}
 
 # Hermes own state
 install -m 600 -D "$HERMES_HOME/config.yaml" "$REPO_DIR/hermes/config.yaml"
@@ -172,6 +172,12 @@ for rb in runbook-containers.md runbook.md; do
     [[ -f "/home/ai_service/ai-stack/$rb" ]] && \
         install -m 644 -D "/home/ai_service/ai-stack/$rb" "$REPO_DIR/host/ai-stack/$rb"
 done
+
+# Реестр file_id дампов, отправленных в Telegram. Бот не читает свою историю чата, поэтому
+# без этого файла install.py --from-bot не может скачать последний бэкап на новом сервере.
+[[ -f /home/ai_service/ai-stack/backups/postgres/.tg-registry.json ]] && \
+    install -m 644 -D /home/ai_service/ai-stack/backups/postgres/.tg-registry.json \
+        "$REPO_DIR/host/backups/tg-registry.json"
 
 # README (first run only — afterwards it is user-editable)
 if [[ ! -f "$REPO_DIR/README.md" ]]; then

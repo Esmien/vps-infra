@@ -35,6 +35,7 @@ WATCH=(
     /etc/logrotate.d/hermes-state-backup
     /home/ai_service/ai-stack/runbook-containers.md
     /home/ai_service/ai-stack/ai/backup-databases.sh
+    /home/ai_service/ai-stack/backups/postgres/.tg-registry.json
 )
 # .hub — 51 МБ клон хаба, в снапшот не идёт; .git/__pycache__/локи — шум
 # cron deliveries.db-wal пишется постоянно и сбрасывал бы debounce бесконечно;

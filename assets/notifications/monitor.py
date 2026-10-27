@@ -681,8 +681,13 @@ def format_size(size_bytes: int) -> str:
     return f"{value:.1f} ТиБ"
 
 
-# Telegram sendDocument limit is 50 MB; keep a margin before splitting.
-TG_DOC_LIMIT = 45 * 1024 * 1024
+# Telegram sendDocument takes 50 MB, but getFile — the call a restore uses to pull the dump
+# back — stops at 20 MB. Parts therefore have to fit the DOWNLOAD limit, otherwise the backup
+# sits in the chat and cannot be recovered on a new server. 18 MB leaves a small margin.
+TG_DOC_LIMIT = 18 * 1024 * 1024
+# file_id реестр: последние N наборов на базу (реестр уходит в git-снапшот, он должен быть мал).
+TG_REGISTRY_SETS_PER_DB = 3
+TG_REGISTRY_NAME = ".tg-registry.json"
 # Databases reported first, in this order; any other DB is appended alphabetically.
 REPORT_DB_ORDER = ("webui_db", "litellm_db")
 # /backups restores the newest dump of each DB into a throwaway database to prove it is
@@ -796,8 +801,12 @@ def build_split_instruction(
     return "\n".join(lines)
 
 
-def send_document(token: str, chat_id: str, path: Path, caption: str | None = None) -> None:
-    """Upload a file to Telegram via sendDocument (multipart/form-data)."""
+def send_document(token: str, chat_id: str, path: Path, caption: str | None = None) -> dict:
+    """Upload a file to Telegram via sendDocument (multipart/form-data).
+
+    Returns the Telegram identifiers of the uploaded document: a bot cannot read its own chat
+    history, so `file_id` has to be stored now to be able to download the file later.
+    """
     boundary = "----HermesBoundary" + uuid.uuid4().hex
     chunks: list[bytes] = []
 
@@ -848,6 +857,90 @@ def send_document(token: str, chat_id: str, path: Path, caption: str | None = No
             f"Telegram принял {path.name} размером {reported_size} Б вместо {expected_size} Б — "
             "файл загружен не полностью."
         )
+    return {
+        "message_id": (result.get("result") or {}).get("message_id"),
+        "file_id": document.get("file_id"),
+        "file_unique_id": document.get("file_unique_id"),
+        "file_size": reported_size if isinstance(reported_size, int) else expected_size,
+    }
+
+
+def tg_registry_path() -> Path:
+    """Где лежит реестр file_id отправленных дампов.
+
+    Бот не умеет читать свою историю чата, поэтому единственная зацепка для восстановления —
+    file_id, который вернул sendDocument. Реестр пишется рядом с дампами и уезжает в приватный
+    git-снапшот (`host/backups/tg-registry.json`), откуда его читает install.py.
+    """
+    explicit = os.environ.get("TG_REGISTRY")
+    if explicit:
+        return Path(explicit).expanduser()
+    return env_path("BACKUP_DIR", "/var/backups") / TG_REGISTRY_NAME
+
+
+def record_backup_registry(entry: dict) -> Path:
+    """Добавить набор (дамп + части) в реестр, оставив N последних наборов на базу."""
+    path = tg_registry_path()
+    data: dict[str, Any] = {"sets": []}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text())
+            if isinstance(loaded, dict):
+                data = loaded
+        except (OSError, json.JSONDecodeError):
+            data = {"sets": []}
+    sets = [
+        item
+        for item in data.get("sets", [])
+        if isinstance(item, dict) and item.get("dump") != entry.get("dump")
+    ]
+    sets.append(entry)
+    kept: list[dict] = []
+    counts: dict[str, int] = {}
+    for item in sorted(sets, key=lambda s: str(s.get("created_at", "")), reverse=True):
+        db = str(item.get("db", ""))
+        if counts.get(db, 0) >= TG_REGISTRY_SETS_PER_DB:
+            continue
+        counts[db] = counts.get(db, 0) + 1
+        kept.append(item)
+    payload = {
+        "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "chat_id": str(entry.get("chat_id", "")),
+        "sets": kept,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+    return path
+
+
+def backup_registry_entry(
+    db: str, dump: Path, chat_id: str, parts: list[tuple[Path, dict]], complete: bool
+) -> dict:
+    """Собрать запись реестра: дамп, его sha256 и по каждой части file_id + message_id."""
+    return {
+        "db": db,
+        "dump": dump.name,
+        "size": dump.stat().st_size,
+        "sha256": sha256_of(dump),
+        "created_at": datetime.fromtimestamp(
+            dump.stat().st_mtime, tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "chat_id": str(chat_id),
+        "complete": complete,
+        "parts": [
+            {
+                "name": part.name,
+                "size": part.stat().st_size,
+                "sha256": sha256_of(part),
+                "file_id": sent.get("file_id"),
+                "message_id": sent.get("message_id"),
+            }
+            for part, sent in parts
+        ],
+    }
 
 
 def collect_backup_groups() -> tuple[dict[str, list[Path]], list[str], list[Path]]:
@@ -1052,9 +1145,11 @@ def notify_backup(file_arg: str | None = None, dry_run: bool = False) -> None:
     if not file_token or not chat_id:
         raise MonitorError("В .env должны быть заданы FILE_BOT_TOKEN и BOT_OWNER.")
     upload_errors: list[str] = []
+    registry_entries: list[dict] = []
     for name in order:
         latest = groups[name][0]
         size = latest.stat().st_size
+        sent_parts: list[tuple[Path, dict]] = []
         if size > TG_DOC_LIMIT:
             parts = split_dump(latest)
             part_sizes = [(part.name, part.stat().st_size) for part in parts]
@@ -1065,9 +1160,14 @@ def notify_backup(file_arg: str | None = None, dry_run: bool = False) -> None:
                         print(f"[dry-run] sendDocument {part.name} ({format_size(part.stat().st_size)})")
                     else:
                         try:
-                            send_document(file_token, chat_id, part)
+                            sent_parts.append((part, send_document(file_token, chat_id, part)))
                         except MonitorError as exc:
                             part_errors.append(f"{part.name}: {exc}")
+                if not dry_run:
+                    # sha256 частей считается здесь: файлы удаляются в `finally`.
+                    registry_entries.append(
+                        backup_registry_entry(name, latest, chat_id, sent_parts, not part_errors)
+                    )
             finally:
                 for part in parts:
                     part.unlink(missing_ok=True)
@@ -1090,9 +1190,14 @@ def notify_backup(file_arg: str | None = None, dry_run: bool = False) -> None:
             print(f"[dry-run] sendDocument {latest.name} ({format_size(size)})")
         else:
             try:
-                send_document(file_token, chat_id, latest)
+                sent_parts.append((latest, send_document(file_token, chat_id, latest)))
+                registry_entries.append(backup_registry_entry(name, latest, chat_id, sent_parts, True))
             except MonitorError as exc:
                 upload_errors.append(f"{latest.name}: {exc}")
+
+    for entry in registry_entries:
+        path = record_backup_registry(entry)
+        print(f"реестр file_id: {path} ({entry['dump']}, частей {len(entry['parts'])})")
 
     # 2) Build the daily report for the message bot.
     message = build_backup_digest(groups, order, files)
