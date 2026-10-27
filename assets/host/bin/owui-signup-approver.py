@@ -72,6 +72,21 @@ def stack_secret(name):
     return _stack[name]
 
 
+def admin_password():
+    """Password of the Open WebUI admin that signin is done for.
+
+    UI_PASSWORD in the ai-stack .env is the **LiteLLM** admin password and does
+    not have to match the WebUI account (the WebUI password is chosen on first
+    login). So the WebUI admin password lives in this service's own env as
+    OWUI_ADMIN_PASSWORD; UI_PASSWORD stays only as a legacy fallback.
+    """
+    pw = CFG.get("OWUI_ADMIN_PASSWORD")
+    if pw:
+        return pw
+    log.warning("OWUI_ADMIN_PASSWORD is not set in %s — falling back to UI_PASSWORD", CFG_FILE)
+    return stack_secret("UI_PASSWORD")
+
+
 def load_state():
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as fh:
@@ -174,10 +189,10 @@ def admin_token(force=False):
         return _api_token["value"]
     status, payload = api(
         "POST", "/api/v1/auths/signin",
-        {"email": admin_email(), "password": stack_secret("UI_PASSWORD")},
+        {"email": admin_email(), "password": admin_password()},
     )
     if status != 200 or not isinstance(payload, dict) or not payload.get("token"):
-        raise ApiError(f"signin failed: HTTP {status}")
+        raise ApiError(f"signin failed: HTTP {status} (admin {admin_email()}; check OWUI_ADMIN_PASSWORD in {CFG_FILE})")
     _api_token["value"] = payload["token"]
     return _api_token["value"]
 

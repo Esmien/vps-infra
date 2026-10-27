@@ -62,6 +62,10 @@ services:
     environment:
       WEBUI_NAME: "Esmien AI"     # правку суффикса " (Open WebUI)" делает Dockerfile в webui-branding
       ENABLE_ADMIN_CHAT_ACCESS: ${ENABLE_ADMIN_CHAT_ACCESS}
+      # Прямые интеграции: с 0.12.4 при false сохранённые tool-серверы и
+      # Open Terminal connections в чатах НЕ используются (раньше флаг
+      # только прятал вкладку Integrations). У нас терминал завязан на это.
+      ENABLE_DIRECT_INTEGRATIONS: ${ENABLE_DIRECT_INTEGRATIONS}
       DATABASE_URL: postgresql://webui:${WEBUI_DB_PASSWORD}@host.docker.internal:5432/webui_db
       VECTOR_DB: pgvector
       PGVECTOR_DB_URL: postgresql://webui:${WEBUI_DB_PASSWORD}@host.docker.internal:5432/webui_db

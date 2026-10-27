@@ -26,15 +26,19 @@ vps-infra — установщик всей инфраструктуры VPS.
   --skip restore,tls      пропустить шаги
   --only stack,verify     выполнить только выбранные шаги
   --bundle PATH|URL       архив с дампами БД (и данными WebUI)
+  --from-bot              взять последний бэкап БД из Telegram-бота (спросит токен)
+  --tg-registry PATH|URL  реестр file_id (по умолчанию — приватный hermes-state)
   --restore               восстановить БД даже поверх существующих данных
   --skip-tls              не трогать nginx/certbot
   --hermes / --no-hermes  установить/не устанавливать Hermes
+  --restore-hermes        развернуть config/skills/скрипты Hermes из hermes-state
   --dry-run               показать, что будет сделано
 """
 
 from __future__ import annotations
 
 import argparse
+import calendar
 import getpass
 import hashlib
 import json
@@ -50,6 +54,7 @@ import tarfile
 import tempfile
 import time
 import traceback
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -71,6 +76,14 @@ PG_VERSION = "17"
 DOCKER_NET = "stack-net"
 STALE_HOURS = 72
 HERMES_INSTALL_URL = "https://hermes-agent.nousresearch.com/install.sh"
+
+# Приватный репозиторий состояния Hermes: конфиги/скиллы + реестр file_id дампов.
+HERMES_STATE_REPO = os.environ.get("HERMES_STATE_REPO", "Esmien/hermes-state")
+HERMES_STATE_BRANCH = os.environ.get("HERMES_STATE_BRANCH", "main")
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", "/root/.hermes"))
+# Bot API отдаёт файл через getFile только до 20 MB — части больше этого скачать нельзя.
+TG_DOWNLOAD_LIMIT = 20 * 1024 * 1024
+TG_API = "https://api.telegram.org"
 
 # ── цвета / вывод ────────────────────────────────────────────────────────────
 
@@ -149,6 +162,7 @@ STEPS: list[tuple[str, str]] = [
     ("stack", "Файлы стека"),
     ("secrets", "Секреты и .env"),
     ("bundle", "Bundle с дампами"),
+    ("fetch", "Дампы из Telegram-бота"),
     ("postgres", "PostgreSQL 17 + pgvector"),
     ("network", "Docker-сеть"),
     ("images", "Docker-образы"),
@@ -222,6 +236,11 @@ class Installer:
         self.compose_dir = self.infra_dir / "ai"
         self.compose_file = self.compose_dir / "docker-compose.yml"
         self.dump_dir = self.infra_dir / "backups" / "postgres"
+        # Telegram-восстановление и состояние Hermes: токен живёт только в памяти.
+        self.bot_restore = bool(getattr(args, "from_bot", False))
+        self.tg_token = getattr(args, "tg_token", "") or ""
+        self.hermes_restore: bool | None = getattr(args, "restore_hermes", None)
+        self.dump_from_bot = False
 
     # ── инфраструктура логирования ──────────────────────────────────────────
 
@@ -463,6 +482,17 @@ class Installer:
                     found.setdefault(kind, n.group(1))
         return found
 
+    def confirm(self, label: str, default: bool = False) -> bool:
+        """Да/нет с дефолтом; при --yes и без tty вопросы не задаются."""
+        mark = "[Y/n]" if default else "[y/N]"
+        try:
+            ans = input(f"\n  {C_BOLD}{label}{C_RESET} {C_DIM}{mark}{C_RESET}: ").strip().lower()
+        except EOFError:
+            return default
+        if not ans:
+            return default
+        return ans in ("y", "yes", "д", "да")
+
     def prompt(
         self,
         store: dict,
@@ -556,6 +586,42 @@ class Installer:
             self.env, "GITHUB_KEY", "GitHub token для бэкапа Hermes (можно пусто)",
             default=self.env.get("GITHUB_KEY", ""), secret=True,
         )
+
+        # ── источник дампов: Telegram-бот вместо ручного bundle ────────────────
+        bot = cfg.setdefault("bot_restore", {})
+        if self.args.from_bot:
+            self.bot_restore = True
+        elif not self.args.yes and sys.stdin.isatty():
+            self.bot_restore = self.confirm(
+                "Тянуть последний бэкап БД из Telegram-бота?",
+                default=bool(bot.get("enabled")),
+            )
+        bot["enabled"] = self.bot_restore
+        if self.bot_restore:
+            if not self.tg_token:
+                nenv_tokens = parse_env(NOTIF_DIR / ".env")
+                self.tg_token = self.prompt(
+                    {}, "file_bot_token", "Токен файл-бота (FILE_BOT_TOKEN)",
+                    default=nenv_tokens.get("FILE_BOT_TOKEN", ""),
+                    secret=True, required=True,
+                    hint="Тот же бот, которому уходят дампы. В install.json токен не пишется.",
+                )
+            info(f"дампы будут взяты из бота, токен {mask(self.tg_token)}")
+
+        # ── состояние Hermes из приватного репозитория ─────────────────────────
+        if self.args.hermes is not False:
+            if self.args.restore_hermes is not None:
+                self.hermes_restore = bool(self.args.restore_hermes)
+            elif self.args.yes:
+                # --yes без явного флага не разворачивает состояние поверх живого агента.
+                self.hermes_restore = bool(self.args.hermes)
+            elif sys.stdin.isatty():
+                self.hermes_restore = self.confirm(
+                    "Развернуть config/skills/скрипты Hermes из приватного репозитория?",
+                    default=True,
+                )
+            if self.hermes_restore and not self.env.get("GITHUB_KEY"):
+                warn("GITHUB_KEY пуст — состояние Hermes развернуть не получится")
 
         # Внутренние секреты — только генерируются, спрашивать нечего.
         for key in (
@@ -842,6 +908,249 @@ class Installer:
         if not self.dry:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    # ── дампы из Telegram-бота ───────────────────────────────────────────────
+
+    def http_get(self, url: str, headers: dict | None = None, timeout: int = 120) -> bytes:
+        req = urllib.request.Request(url, headers=headers or {})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+
+    def github_headers(self) -> dict:
+        key = self.env.get("GITHUB_KEY", "")
+        if not key:
+            return {}
+        return {"Authorization": f"Bearer {key}", "Accept": "application/vnd.github.raw"}
+
+    def load_tg_registry(self) -> dict | None:
+        """Реестр file_id: явный --tg-registry → локальный файл → приватный hermes-state."""
+        src = self.args.tg_registry
+        if src:
+            if src.startswith(("http://", "https://")):
+                try:
+                    raw = self.http_get(src, headers=self.github_headers())
+                except (urllib.error.URLError, OSError) as exc:
+                    die(f"реестр недоступен: {src}: {exc}")
+            else:
+                path = Path(src).expanduser()
+                if not path.is_file():
+                    die(f"реестр не найден: {path}")
+                raw = path.read_bytes()
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError as exc:
+                die(f"реестр не JSON: {src}: {exc}")
+
+        local = self.dump_dir / ".tg-registry.json"
+        if local.is_file():
+            try:
+                info(f"реестр file_id найден локально: {local}")
+                return json.loads(local.read_text())
+            except (OSError, json.JSONDecodeError):
+                warn(f"локальный реестр повреждён: {local}")
+
+        if not self.env.get("GITHUB_KEY"):
+            info("GITHUB_KEY не задан — реестр из hermes-state недоступен")
+            return None
+        url = (
+            f"https://api.github.com/repos/{HERMES_STATE_REPO}/contents/"
+            f"host/backups/tg-registry.json?ref={HERMES_STATE_BRANCH}"
+        )
+        try:
+            raw = self.http_get(url, headers=self.github_headers())
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                info(f"в {HERMES_STATE_REPO} ещё нет host/backups/tg-registry.json")
+            else:
+                warn(f"реестр из GitHub: HTTP {exc.code}")
+            return None
+        except (urllib.error.URLError, OSError) as exc:
+            warn(f"реестр из GitHub: {exc}")
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            warn("реестр из GitHub не JSON")
+            return None
+
+    def latest_registry_sets(self, registry: dict) -> list[dict]:
+        """Последний набор на каждую базу (webui_db, litellm_db)."""
+        sets = [
+            item for item in registry.get("sets", [])
+            if isinstance(item, dict) and item.get("dump") and item.get("parts")
+        ]
+        best: dict[str, dict] = {}
+        for entry in sorted(sets, key=lambda s: str(s.get("created_at") or "")):
+            db = str(entry.get("db") or "")
+            if db in ("webui_db", "litellm_db"):
+                best[db] = entry
+        for db, entry in best.items():
+            if not entry.get("complete", True):
+                warn(f"{db}: последний набор {entry.get('dump')} помечен как неполный")
+        return [best[db] for db in ("webui_db", "litellm_db") if db in best]
+
+    def sets_from_updates(self, token: str) -> list[dict]:
+        """Fallback: файлы, которые владелец переслал боту (реестра нет/недоступен)."""
+        url = (
+            f"{TG_API}/bot{token}/getUpdates?limit=100"
+            "&allowed_updates=%5B%22message%22%2C%22channel_post%22%5D"
+        )
+        try:
+            data = json.loads(self.http_get(url))
+        except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+            warn(f"getUpdates: {exc}")
+            return []
+        if not data.get("ok"):
+            warn(f"getUpdates: {data.get('description')}")
+            return []
+        grouped: dict[str, dict] = {}
+        for upd in data.get("result", []):
+            msg = upd.get("message") or upd.get("channel_post") or {}
+            doc = msg.get("document") or {}
+            name = str(doc.get("file_name") or "")
+            match = re.match(r"^(?P<db>.+?)_(?P<ts>\d{8}_\d{6})\.dump(?:\.part_(?P<part>\d+))?$", name)
+            if not match or not doc.get("file_id"):
+                continue
+            db, ts = match.group("db"), match.group("ts")
+            key = f"{db}|{ts}"
+            entry = grouped.setdefault(
+                key,
+                {
+                    "db": db,
+                    "dump": f"{db}_{ts}.dump",
+                    "complete": False,
+                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.strptime(ts, "%Y%m%d_%H%M%S")),
+                    "parts": [],
+                },
+            )
+            entry["parts"].append(
+                {
+                    "name": name,
+                    "size": int(doc.get("file_size") or 0),
+                    "file_id": doc["file_id"],
+                    "message_id": msg.get("message_id"),
+                }
+            )
+        best: dict[str, dict] = {}
+        for entry in grouped.values():
+            entry["parts"].sort(key=lambda part: part["name"])
+            entry["size"] = sum(int(part.get("size") or 0) for part in entry["parts"])
+            db = entry["db"]
+            if db in ("webui_db", "litellm_db") and (
+                db not in best or entry["created_at"] > best[db]["created_at"]
+            ):
+                best[db] = entry
+        if best:
+            info("из getUpdates: " + ", ".join(f"{db} ← {entry['dump']}" for db, entry in best.items()))
+        return [best[db] for db in ("webui_db", "litellm_db") if db in best]
+
+    def tg_download(self, token: str, part: dict) -> bytes:
+        name = str(part.get("name") or "?")
+        file_id = str(part.get("file_id") or "")
+        if not file_id:
+            die(f"{name}: в реестре нет file_id")
+        expected = int(part.get("size") or 0)
+        if expected > TG_DOWNLOAD_LIMIT:
+            die(
+                f"{name}: {expected / 1024**2:.1f} MB — Bot API отдаёт не больше 20 MB. "
+                "Нужны части ≤18 MB (TG_DOC_LIMIT в notifications/monitor.py) — "
+                "дождитесь нового бэкапа или возьмите --bundle"
+            )
+        try:
+            meta = json.loads(self.http_get(f"{TG_API}/bot{token}/getFile?file_id={file_id}"))
+        except urllib.error.HTTPError as exc:
+            die(f"getFile {name}: HTTP {exc.code} (file_id устарел?)")
+        if not meta.get("ok"):
+            die(f"getFile {name}: {meta.get('description')}")
+        remote = meta.get("result") or {}
+        if int(remote.get("file_size") or 0) > TG_DOWNLOAD_LIMIT:
+            die(f"{name}: Telegram отдаёт {remote.get('file_size')} Б — больше лимита 20 MB")
+        if not remote.get("file_path"):
+            die(f"{name}: Telegram не вернул file_path")
+        blob = self.http_get(f"{TG_API}/file/bot{token}/{remote['file_path']}", timeout=600)
+        if expected and len(blob) != expected:
+            die(f"{name}: скачано {len(blob)} Б вместо {expected} Б")
+        want = part.get("sha256")
+        digest = hashlib.sha256(blob).hexdigest()
+        if want and digest != want:
+            die(f"{name}: sha256 {digest[:12]} ≠ реестрового {str(want)[:12]}")
+        info(f"{name}: {len(blob) / 1024**2:.1f} MB ✓")
+        return blob
+
+    def fetch_backup_set(self, token: str, entry: dict) -> None:
+        dump_name = str(entry.get("dump") or "")
+        parts = sorted(entry.get("parts") or [], key=lambda part: str(part.get("name")))
+        if not dump_name or not parts:
+            warn("пустой набор в источнике — пропускаю")
+            return
+        expected_size = int(entry.get("size") or 0)
+        target = self.dump_dir / dump_name
+        if target.is_file() and (not expected_size or target.stat().st_size == expected_size):
+            ok(f"{dump_name}: уже на месте — скачивание не нужно")
+            return
+        if self.dry:
+            info(f"[dry-run] скачал бы {dump_name}: {len(parts)} частей, {expected_size / 1024**2:.1f} MB")
+            return
+        self.ensure_dir(self.dump_dir, 0o755, AI_USER)
+        work = STATE_DIR / "tg-restore"
+        self.ensure_dir(work, 0o700)
+        joined = work / dump_name
+        with joined.open("wb") as fh:
+            for part in parts:
+                fh.write(self.tg_download(token, part))
+
+        size = joined.stat().st_size
+        if expected_size and size != expected_size:
+            die(f"{dump_name}: склейка {size} Б ≠ ожидаемых {expected_size} Б")
+        digest = hashlib.sha256()
+        with joined.open("rb") as fh:
+            for block in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(block)
+        want = entry.get("sha256")
+        if want and digest.hexdigest() != want:
+            die(f"{dump_name}: sha256 склейки не совпал — файл повреждён при передаче")
+
+        tmp_target = self.dump_dir / f".{dump_name}.tmp"
+        shutil.copyfile(joined, tmp_target)
+        os.replace(tmp_target, target)
+        stamp = entry.get("created_at")
+        if stamp:
+            try:
+                epoch = calendar.timegm(time.strptime(str(stamp), "%Y-%m-%dT%H:%M:%SZ"))
+                os.utime(target, (epoch, epoch))
+            except (ValueError, OverflowError):
+                pass
+        try:
+            shutil.chown(target, AI_USER, AI_USER)
+        except (KeyError, PermissionError):
+            pass
+        ok(f"{dump_name}: {size / 1024**2:.1f} MB, sha256 ok → {target}")
+
+    def step_fetch_bot(self) -> None:
+        step("Дампы из Telegram-бота")
+        if not self.bot_restore:
+            info("выключено (--from-bot чтобы включить)")
+            return
+        token = self.tg_token or parse_env(NOTIF_DIR / ".env").get("FILE_BOT_TOKEN", "")
+        if not token:
+            die("нет токена файл-бота: задайте --tg-token или notifications/.env")
+
+        registry = self.load_tg_registry()
+        entries = self.latest_registry_sets(registry) if registry else []
+        if not entries:
+            warn("реестр file_id недоступен — смотрю getUpdates (пересланные боту файлы)")
+            entries = self.sets_from_updates(token)
+        if not entries:
+            die(
+                "в боте не нашлось дампов: перешлите файлы бэкапа боту и повторите, "
+                "либо укажите --bundle / локальные дампы"
+            )
+        for entry in entries:
+            self.fetch_backup_set(token, entry)
+
+        self.dump_from_bot = True
+        self.cfg["dump_source"] = "telegram"
+        self.save_config()
+
     def step_postgres(self) -> None:
         step(f"PostgreSQL {PG_VERSION} + pgvector")
         cluster = Path(f"/etc/postgresql/{PG_VERSION}/main")
@@ -1032,6 +1341,9 @@ $$;
 
         restore_all = bool(self.args.restore)
         bundle = self.cfg.get("bundle")
+        # Дамп, только что скачанный из бота, — это осознанный выбор источника, а не
+        # «залежавшийся файл»: проверку свежести к нему не применяем.
+        from_bot = self.dump_from_bot
         dbs = [("litellm_db", "litellm"), ("webui_db", "webui")]
         todo = []
         for db, owner in dbs:
@@ -1041,7 +1353,7 @@ $$;
                 info(f"{db}: дамп не найден — пропускаю")
                 continue
             age_h = (time.time() - dump.stat().st_mtime) / 3600
-            if age_h > STALE_HOURS and not self.args.force_stale and not bundle:
+            if age_h > STALE_HOURS and not self.args.force_stale and not bundle and not from_bot:
                 warn(f"{db}: дамп {dump.name} старше {STALE_HOURS} ч ({age_h:.0f} ч) — пропускаю (--force-stale чтобы применить)")
                 continue
             if tables not in ("0", "") and not restore_all:
@@ -1533,6 +1845,9 @@ server {{
                 return
             ok("Hermes установлен")
 
+        if self.hermes_restore:
+            self.restore_hermes_state()
+
         # Обвязка Hermes: boot-notify + бэкап состояния.
         expected = Path("/etc/hermes-boot-expected-containers.txt")
         if not expected.is_file() and not self.dry:
@@ -1544,6 +1859,127 @@ server {{
             ok("обвязка Hermes включена (boot-notify, state backup)")
         else:
             info("GITHUB_KEY не задан — бэкап состояния Hermes не настроен")
+
+    def restore_tree(self, src: Path, dst: Path, owner: str) -> int:
+        """Копирует дерево, сохраняя права файлов (скрипты остаются исполняемыми)."""
+        if not src.is_dir():
+            return 0
+        n = 0
+        for item in sorted(src.rglob("*")):
+            rel = item.relative_to(src)
+            target = dst / rel
+            if item.is_dir():
+                self.ensure_dir(target, 0o755, owner)
+                continue
+            mode = (item.stat().st_mode & 0o777) or 0o644
+            self.ensure_dir(target.parent, 0o755, owner)
+            if self.copy_file(item, target, mode, owner):
+                n += 1
+        return n
+
+    def restore_hermes_state(self) -> None:
+        """Разворачивает config/skills/скрипты/юниты из приватного hermes-state."""
+        step("Состояние Hermes из приватного репозитория")
+        key = self.env.get("GITHUB_KEY", "")
+        if not key:
+            warn("GITHUB_KEY не задан — состояние Hermes не разворачиваю")
+            return
+        prefix = Path(os.environ.get("HERMES_RESTORE_ROOT", "/"))
+        sandbox = prefix != Path("/")
+
+        def dst(path: str | Path) -> Path:
+            return prefix / str(path).lstrip("/")
+
+        if self.dry:
+            info(
+                f"[dry-run] скачал бы {HERMES_STATE_REPO}@{HERMES_STATE_BRANCH} и разложил "
+                f"hermes/ → {dst(HERMES_HOME)}, host/bin → /usr/local/bin, "
+                "host/systemd → /etc/systemd/system, host/etc → /etc"
+            )
+            return
+
+        work = STATE_DIR / "hermes-state"
+        self.ensure_dir(work, 0o700)
+        archive = work / "state.tar.gz"
+        url = f"https://api.github.com/repos/{HERMES_STATE_REPO}/tarball/{HERMES_STATE_BRANCH}"
+        info(f"скачиваю {HERMES_STATE_REPO}@{HERMES_STATE_BRANCH}")
+        try:
+            archive.write_bytes(self.http_get(url, headers={"Authorization": f"Bearer {key}"}, timeout=300))
+        except (urllib.error.URLError, OSError) as exc:
+            warn(f"репозиторий состояния недоступен: {exc} — продолжаю без него")
+            return
+
+        extract = work / "tree"
+        self.ensure_dir(extract, 0o700)
+        try:
+            with tarfile.open(archive) as tar:
+                try:
+                    tar.extractall(extract, filter="data")
+                except TypeError:  # Python < 3.12
+                    tar.extractall(extract)
+        except (tarfile.TarError, OSError) as exc:
+            die(f"не удалось распаковать состояние Hermes: {exc}")
+        roots = sorted(p for p in extract.iterdir() if p.is_dir())
+        src = roots[0] if roots else None
+        if src is None or not (src / "hermes").is_dir():
+            die("в архиве состояния нет каталога hermes/ — проверьте HERMES_STATE_REPO")
+
+        manifest = src / "MANIFEST.sha256"
+        if manifest.is_file():
+            res = self.run(
+                ["bash", "-c", f"cd {shlex.quote(str(src))} && sha256sum -c --quiet MANIFEST.sha256"],
+                check=False,
+            )
+            if res.returncode != 0:
+                warn("MANIFEST.sha256 не сошёлся — разворачиваю как есть")
+            else:
+                ok("MANIFEST.sha256 сошёлся")
+
+        copied = 0
+        copied += self.restore_tree(src / "hermes", dst(HERMES_HOME), "root")
+        copied += self.restore_tree(src / "host" / "bin", dst("/usr/local/bin"), "root")
+        copied += self.restore_tree(src / "host" / "systemd", dst("/etc/systemd/system"), "root")
+
+        etc_map = {
+            "docker-autorecover.conf": "/etc/docker-autorecover.conf",
+            "hermes-boot-expected-containers.txt": "/etc/hermes-boot-expected-containers.txt",
+            "logrotate.d-hermes-state-backup": "/etc/logrotate.d/hermes-state-backup",
+        }
+        for name, target in etc_map.items():
+            source = src / "host" / "etc" / name
+            if source.is_file():
+                self.copy_file(source, dst(target), 0o644, "root")
+                copied += 1
+
+        ai_src = src / "host" / "ai-stack"
+        if (ai_src / "backup-databases.sh").is_file():
+            self.copy_file(ai_src / "backup-databases.sh",
+                           dst(AI_HOME / "ai-stack" / "ai" / "backup-databases.sh"), 0o755, AI_USER)
+            copied += 1
+        for runbook in ("runbook-containers.md", "runbook.md"):
+            if (ai_src / runbook).is_file():
+                self.copy_file(ai_src / runbook, dst(AI_HOME / "ai-stack" / runbook), 0o644, AI_USER)
+                copied += 1
+
+        registry = src / "host" / "backups" / "tg-registry.json"
+        if registry.is_file():
+            self.copy_file(registry, self.dump_dir / ".tg-registry.json", 0o644, AI_USER)
+            copied += 1
+            ok("реестр file_id дампов разложен рядом с бэкапами")
+
+        ok(f"состояние Hermes развёрнуто: {copied} файлов → {dst(HERMES_HOME)}")
+        if sandbox:
+            info(f"HERMES_RESTORE_ROOT={prefix}: systemd не трогаю")
+            return
+
+        self.run(["systemctl", "daemon-reload"], check=False)
+        self.run(["systemctl", "enable", "--now", "hermes-state-watch.service"], check=False)
+        self.run(["loginctl", "enable-linger", "root"], check=False)
+        self.run(
+            ["bash", "-c", "XDG_RUNTIME_DIR=/run/user/0 systemctl --user restart hermes-gateway.service"],
+            check=False,
+        )
+        ok("hermes-state-watch включён, гейтвей перезапущен")
 
     # ── запуск ──────────────────────────────────────────────────────────────
 
@@ -1680,12 +2116,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--only", help="выполнить только шаги (через запятую)")
     p.add_argument("--skip", help="пропустить шаги (через запятую)")
     p.add_argument("--bundle", help="архив с дампами БД (путь или URL)")
+    p.add_argument("--from-bot", action="store_true", help="взять последний бэкап БД из Telegram-бота")
+    p.add_argument("--tg-token", help="токен файл-бота для --from-bot (иначе спросит / возьмёт из .env)")
+    p.add_argument("--tg-registry", help="реестр file_id (путь или URL; по умолчанию — приватный hermes-state)")
     p.add_argument("--restore", action="store_true", help="восстановить БД поверх существующих данных")
     p.add_argument("--force-stale", action="store_true", help=f"применять дампы старше {STALE_HOURS} ч")
     p.add_argument("--skip-restore", action="store_true", help="не трогать базы")
     p.add_argument("--skip-tls", action="store_true", help="не трогать nginx/certbot")
     p.add_argument("--hermes", dest="hermes", action="store_true", default=None, help="установить Hermes")
     p.add_argument("--no-hermes", dest="hermes", action="store_false", help="не устанавливать Hermes")
+    p.add_argument("--restore-hermes", dest="restore_hermes", action="store_true", default=None,
+                   help="развернуть config/skills/скрипты Hermes из приватного hermes-state")
+    p.add_argument("--no-restore-hermes", dest="restore_hermes", action="store_false",
+                   help="не разворачивать состояние Hermes")
     p.add_argument("--dry-run", action="store_true", help="показать план, ничего не менять")
     p.add_argument("--out", help="каталог для export")
     p.add_argument("--with-data", action="store_true", help="export: включить webui_data")
@@ -1702,7 +2145,7 @@ def main(argv: list[str]) -> int:
     if args.command == "check":
         args.check_mode = True
         args.yes = True
-        args.skip = "packages,users,stack,secrets,bundle,postgres,network,images,migrate,restore,apps,notifications,units,tls,hermes"
+        args.skip = "packages,users,stack,secrets,bundle,fetch,postgres,network,images,migrate,restore,apps,notifications,units,tls,hermes"
         args.only = "preflight,verify"
 
     inst = Installer(args)
