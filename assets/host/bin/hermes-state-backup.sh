@@ -134,6 +134,8 @@ HOST_BIN=(
     litellm-spend-retention.sh
     webui-compact-images.sh
     webui-generated-images-retention.sh
+    webui-data-backup.py
+    webui-data-restore.py
     owui-signup-approver.py
     tor-rotate.sh
     fw-guard-postgres.sh
@@ -151,6 +153,7 @@ HOST_UNITS=(
     litellm-watchdog.service litellm-watchdog.timer
     litellm-spend-retention.service litellm-spend-retention.timer
     postgres-backup.service postgres-backup.timer postgres-backup-notify.service postgres-backup-notify.timer
+    webui-data-backup.service webui-data-backup.timer
 )
 for f in "${HOST_UNITS[@]}"; do
     [[ -f "/etc/systemd/system/$f" ]] && install -m 644 -D "/etc/systemd/system/$f" "$REPO_DIR/host/systemd/$f"
