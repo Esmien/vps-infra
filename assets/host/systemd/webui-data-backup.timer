@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Open WebUI files backup weekly (Sunday 04:00 UTC)
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00 UTC
+Persistent=true
+RandomizedDelaySec=15min
+Unit=webui-data-backup.service
+
+[Install]
+WantedBy=timers.target

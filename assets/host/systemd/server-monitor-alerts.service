@@ -1,0 +1,11 @@
+[Unit]
+Description=Disk/inode/backup freshness alerts to Telegram
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /home/ai_service/notifications/monitor.py alerts
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run disk/inode/backup alerts every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Unit=server-monitor-alerts.service
+
+[Install]
+WantedBy=timers.target

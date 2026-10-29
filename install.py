@@ -158,6 +158,9 @@ def parse_env(path: Path) -> dict:
 
 # ── шаги ─────────────────────────────────────────────────────────────────────
 
+# Что тянем из Telegram-бота: две БД и архив пользовательских файлов WebUI.
+RESTORE_DBS = ("webui_db", "litellm_db", "webui_data")
+
 STEPS: list[tuple[str, str]] = [
     ("preflight", "Проверка окружения и сбор параметров"),
     ("packages", "Системные пакеты и Docker"),
@@ -171,6 +174,7 @@ STEPS: list[tuple[str, str]] = [
     ("images", "Docker-образы"),
     ("migrate", "Роли, базы и миграции LiteLLM"),
     ("restore", "Восстановление БД"),
+    ("data", "Файлы WebUI из Telegram-бота"),
     ("apps", "Запуск стека"),
     ("notifications", "Telegram-мониторинг"),
     ("units", "systemd-юниты и таймеры"),
@@ -190,7 +194,9 @@ CORE_TIMERS = [
     "postgres-backup.timer",
     "postgres-backup-notify.timer",
     "searxng-quality.timer",
+    "server-monitor-alerts.timer",
     "webui-compact-images.timer",
+    "webui-data-backup.timer",
     "webui-generated-images-retention.timer",
 ]
 CORE_SERVICES = ["fw-guard-postgres.service"]
@@ -216,6 +222,8 @@ HOST_BIN_SCRIPTS = [
     "owui-signup-approver.py",
     "searxng-quality-check.py",
     "webui-compact-images.sh",
+    "webui-data-backup.py",
+    "webui-data-restore.py",
     "webui-generated-images-retention.sh",
     "hermes-boot-notify.sh",
     "hermes-state-backup.sh",
@@ -992,7 +1000,7 @@ class Installer:
             return None
 
     def latest_registry_sets(self, registry: dict) -> list[dict]:
-        """Последний набор на каждую базу (webui_db, litellm_db)."""
+        """Последний набор на каждую базу (webui_db, litellm_db) и архив файлов WebUI."""
         sets = [
             item for item in registry.get("sets", [])
             if isinstance(item, dict) and item.get("dump") and item.get("parts")
@@ -1000,12 +1008,12 @@ class Installer:
         best: dict[str, dict] = {}
         for entry in sorted(sets, key=lambda s: str(s.get("created_at") or "")):
             db = str(entry.get("db") or "")
-            if db in ("webui_db", "litellm_db"):
+            if db in RESTORE_DBS:
                 best[db] = entry
         for db, entry in best.items():
             if not entry.get("complete", True):
                 warn(f"{db}: последний набор {entry.get('dump')} помечен как неполный")
-        return [best[db] for db in ("webui_db", "litellm_db") if db in best]
+        return [best[db] for db in RESTORE_DBS if db in best]
 
     def sets_from_updates(self, token: str) -> list[dict]:
         """Fallback: файлы, которые владелец переслал боту (реестра нет/недоступен)."""
@@ -1412,6 +1420,38 @@ $$;
         self.create_views()
         # LiteLLM должен перечитать схему после подмены БД.
         self.compose("restart", "litellm", stream=False, timeout=300)
+
+    def step_data(self) -> None:
+        """Распаковать архив пользовательских файлов WebUI, скачанный из бота."""
+        step("Файлы Open WebUI")
+        archives = sorted(
+            self.dump_dir.glob("webui_data_files_*.tar.gz"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not archives:
+            info("архива webui_data нет — пропускаю")
+            return
+        archive = archives[0]
+        if WEBUI_DATA.is_dir() and any(WEBUI_DATA.iterdir()) and not self.args.restore:
+            info("webui_data уже не пуст — пропускаю (--restore чтобы перезаписать)")
+            return
+        info(f"{archive.name} ({archive.stat().st_size / 1024**2:.0f} MB) → {WEBUI_DATA}")
+        if self.dry:
+            info("[dry-run] распаковка пропущена")
+            return
+        self.ensure_dir(WEBUI_DATA, 0o755, AI_USER)
+        try:
+            with tarfile.open(archive) as tar:
+                try:
+                    tar.extractall(WEBUI_DATA, filter="data")
+                except TypeError:  # Python < 3.12
+                    tar.extractall(WEBUI_DATA)
+        except (tarfile.TarError, OSError) as exc:
+            die(f"не удалось распаковать {archive.name}: {exc}")
+        self.run(["chown", "-R", f"{AI_USER}:{AI_USER}", str(WEBUI_DATA)])
+        ok(f"файлы WebUI восстановлены из {archive.name}")
+        self.changed.append(str(archive))
 
     def find_dump(self, db: str) -> Path | None:
         candidates: list[Path] = []

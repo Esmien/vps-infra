@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly offsite backup of Open WebUI files to the Telegram file bot
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/webui-data-backup.py
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=1800
