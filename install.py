@@ -194,7 +194,6 @@ CORE_TIMERS = [
     "postgres-backup.timer",
     "postgres-backup-notify.timer",
     "searxng-quality.timer",
-    "server-monitor-alerts.timer",
     "webui-compact-images.timer",
     "webui-data-backup.timer",
     "webui-generated-images-retention.timer",
