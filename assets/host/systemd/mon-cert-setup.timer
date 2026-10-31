@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry mon.<domain> certificate every 30 min until issued
+
+[Timer]
+OnActiveSec=5min
+OnUnitActiveSec=30min
+AccuracySec=1min
+Unit=mon-cert-setup.service
+
+[Install]
+WantedBy=timers.target

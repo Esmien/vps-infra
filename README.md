@@ -193,8 +193,15 @@ Hub слушает только `127.0.0.1:8090`, наружу не публик
 * Алерты: `Status` (упал), `CPU>85`/10 мин, `Memory>90`/10 мин, `Disk>85`/30 мин,
   доставка — webhook `telegram://<BOT_TOKEN>@telegram?chats=<chat_id>&parseMode=HTML`
   в `user_settings.settings.webhooks` (токен хранится только в локальной БД).
-* Доступ снаружи: нужна A-запись (например `mon.<domain>`), затем vhost + certbot.
-  Пока DNS нет — SSH-туннель: `ssh -L 8090:127.0.0.1:8090 root@<ip>` → `http://localhost:8090`.
+* Доступ снаружи: `mon.<base-domain>` → A-запись на сервер. На чистой установке
+  домен попадает в `step_tls` автоматически (`sites[mon] = 8090`), сертификат
+  выпускает certbot. На живом хосте без DNS — SSH-туннель:
+  `ssh -L 8090:127.0.0.1:8090 root@<ip>` → `http://localhost:8090`.
+* **Let's Encrypt лимит: 50 сертификатов на зарегистрированный домен за 168 ч.**
+  Если certbot ответил `too many certificates ... retry after <время>` — ставить
+  `mon-cert-setup.timer` (в `assets/host/{bin,systemd}`), он ретраит каждые 30 мин,
+  при успехе сам кладёт HTTPS-vhost из `assets/host/nginx/mon.<domain>.ssl`,
+  переключает `APP_URL` на https и присылает уведомление.)
 * Логин админа — `/etc/beszel-admin.env` (0600 root).
 
 ### Внешний мониторинг: GitHub Actions (работает из коробки)

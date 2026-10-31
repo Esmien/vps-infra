@@ -1866,6 +1866,12 @@ server {{
         extra = (self.cfg.get("extra_domain") or "").strip()
         if extra:
             sites[extra] = ("127.0.0.1", 8000)
+        # Beszel hub (шаг beszel): mon.<base-domain> → 127.0.0.1:8090
+        mon = (self.cfg.get("mon_domain") or "").strip()
+        if not mon and "." in (self.cfg.get("ai_domain") or ""):
+            mon = "mon." + self.cfg["ai_domain"].split(".", 1)[1]
+        if mon:
+            sites[mon] = ("127.0.0.1", 8090)
         avail = Path("/etc/nginx/sites-available")
         enabled = Path("/etc/nginx/sites-enabled")
         self.ensure_dir(avail, 0o755)

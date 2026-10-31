@@ -4,7 +4,7 @@ services:
     container_name: beszel
     restart: unless-stopped
     environment:
-      APP_URL: http://127.0.0.1:8090
+      APP_URL: ${APP_URL:-http://127.0.0.1:8090}
     ports:
       - 127.0.0.1:8090:8090
     volumes:
