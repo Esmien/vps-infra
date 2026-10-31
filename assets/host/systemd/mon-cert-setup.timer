@@ -1,10 +1,10 @@
 [Unit]
-Description=Retry mon.<domain> certificate: точный заход на сброс лимита LE (reset+4s)
+Description=Retry mon.<domain> certificate: race for a slot in the shared qd.je LE pool
 
 [Timer]
-OnActiveSec=60s
-OnUnitActiveSec=2min
-AccuracySec=5s
+OnActiveSec=30s
+OnUnitActiveSec=60s
+AccuracySec=1s
 Unit=mon-cert-setup.service
 
 [Install]
