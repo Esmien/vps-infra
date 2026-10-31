@@ -180,7 +180,24 @@ maintainer/                 авто-коммит/пуш репозитория 
 * Бэкапы БД — ежедневно, `systemctl list-timers postgres-backup.timer`.
 * Мониторинг — `systemctl status server-monitor-bot server-monitor-events`.
 
-### Внешний dead-man switch
+### Внешний мониторинг: GitHub Actions (работает из коробки)
+
+`.github/workflows/uptime.yml` cron `*/10 * * * *` дергает публичные домены
+**с раннеров GitHub** — то есть проверяет сервер снаружи, независимо от него.
+Нет 200 с трёх попыток подряд → сообщение в Telegram (secret `TG_BOT_TOKEN`,
+chat 214062001) + письмо GitHub о падении воркфлоу.
+
+* Секрет уже заведён: `gh secret set TG_BOT_TOKEN` или через API (encrypted_value).
+* Drill без ожидания реального падения:
+  `gh workflow run uptime.yml -f extra_url=https://httpbin.org/status/500` —
+  прогон упадёт и пришлёт сообщение с префиксом `[ТЕСТ]`.
+* **Публичные репо: GitHub отключает `schedule` после 60 дней без активности.**
+  Поэтому `uptime-heartbeat.timer` раз в месяц дописывает строку в
+  `maintainer/uptime-heartbeat.txt` — watcher коммитит, расписание живёт.
+* Точность: GitHub cron ходит с разбросом ±5–15 мин, обнаружение — до ~20 мин.
+  Нужно быстрее/точнее — второй контур на healthchecks.io (см. ниже).
+
+### Внешний dead-man switch (healthchecks.io, опционально)
 
 Внутренний мониторинг живёт на этой же машине и умирает вместе с ней. Чтобы
 узнавать о полном падении (хост, сеть, провайдер), есть `deadman-ping.timer`:
