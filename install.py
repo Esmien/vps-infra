@@ -178,6 +178,7 @@ STEPS: list[tuple[str, str]] = [
     ("apps", "Запуск стека"),
     ("notifications", "Telegram-мониторинг"),
     ("units", "systemd-юниты и таймеры"),
+    ("hardening", "fail2ban и anti-flood"),
     ("tls", "Nginx + сертификаты"),
     ("verify", "Проверка результата"),
     ("hermes", "Hermes"),
@@ -230,6 +231,41 @@ HOST_BIN_SCRIPTS = [
 ]
 
 BACKEND_PORTS = {"8080": "ai", "4000": "llm"}
+
+# fail2ban: SSH-брутфорс. Конфиг кладётся в /etc/fail2ban/jail.local
+# (перекрывает jail.conf и jail.d/defaults-debian.conf, где sshd уже включён).
+FAIL2BAN_JAIL = """[DEFAULT]
+# Не банить себя и внутренние сети (docker)
+ignoreip = 127.0.0.1/8 ::1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+
+bantime  = 1d
+findtime = 1h
+maxretry = 4
+
+# Повторные нарушители получают экспоненциально дольше
+bantime.increment = true
+bantime.factor    = 2
+bantime.maxtime   = 4w
+
+backend = systemd
+
+[sshd]
+enabled  = true
+mode     = aggressive
+port     = ssh
+logpath  = %(sshd_log)s
+maxretry = 4
+"""
+
+# nginx: зоны rate-limit. Подключается из conf.d (раньше sites-enabled).
+# На 24.04 у fail2ban action = nftables (своя таблица inet f2b-table),
+# это в отдельном пространстве и с iptables-правилами fw-guard не конфликтует.
+RATE_LIMIT_CONF = """# Rate limiting — защита от L7-флуда (статика WebUI намеренно без лимита)
+# llm: публичный API LiteLLM, ai: /api/ Open WebUI (вход + чат + загрузки)
+limit_req_zone $binary_remote_addr zone=llm_api:10m  rate=10r/s;
+limit_req_zone $binary_remote_addr zone=webui_api:10m rate=8r/s;
+limit_conn_zone $binary_remote_addr zone=conn_per_ip:10m;
+"""
 
 
 class Installer:
@@ -1678,6 +1714,39 @@ server {{
 
     def vhost_ssl(self, domain: str, backend: tuple[str, int]) -> str:
         host, port = backend
+        server_limits = ""
+        api_location = ""
+        if port == 4000:
+            # LiteLLM: лимит на весь server, тут нет статики.
+            server_limits = (
+                "    # anti-flood: 10 r/s на IP, всплеск 40, сверх — 429\n"
+                "    limit_req zone=llm_api burst=40 nodelay;\n"
+                "    limit_req_status 429;\n"
+                "    limit_conn conn_per_ip 20;\n\n"
+            )
+        elif port == 8080:
+            # WebUI: лимит только на /api/ — иначе пачка чанков при F5 даёт 429.
+            api_location = f"""    # anti-flood только на API: статика (/assets, /_app) идёт без лимита
+    location /api/ {{
+        limit_req zone=webui_api burst=30 nodelay;
+        limit_req_status 429;
+        limit_conn conn_per_ip 30;
+
+        proxy_pass http://{host}:{port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }}
+
+"""
         return f"""# {domain} -> {host}:{port}
 server {{
     listen 80;
@@ -1697,7 +1766,7 @@ server {{
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
     client_max_body_size 100M;
 
-    location / {{
+{server_limits}{api_location}    location / {{
         proxy_pass http://{host}:{port};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
@@ -1721,6 +1790,26 @@ server {{
             return False
         public = self.cfg.get("public_ip") or self.public_ip()
         return bool(public) and resolved == public
+
+    def step_hardening(self) -> None:
+        step("fail2ban и anti-flood")
+        if shutil.which("fail2ban-client") is None:
+            self.apt_install(["fail2ban", "python3-systemd"])
+            ok("fail2ban установлен")
+        else:
+            ok("fail2ban уже установлен")
+        # jail.local перекрывает jail.conf и jail.d/defaults-debian.conf.
+        self.write_file(Path("/etc/fail2ban/jail.local"), FAIL2BAN_JAIL, 0o644)
+        res = self.run(["fail2ban-client", "-t"], check=False)
+        if res.returncode != 0:
+            warn("jail.local не проходит проверку — fail2ban оставлен как есть")
+            return
+        self.run(["systemctl", "enable", "--now", "fail2ban"], check=False)
+        state = self.run(["systemctl", "is-active", "fail2ban"], check=False).stdout.strip()
+        if state == "active":
+            ok("fail2ban активен (sshd: maxretry=4/1ч, бан 1д+)")
+        else:
+            warn(f"fail2ban не активен (state={state or '?'}) — journalctl -u fail2ban")
 
     def step_tls(self) -> None:
         step("Nginx + сертификаты")
@@ -1746,6 +1835,10 @@ server {{
         enabled = Path("/etc/nginx/sites-enabled")
         self.ensure_dir(avail, 0o755)
         self.ensure_dir(enabled, 0o755)
+        # Зоны rate-limit обязаны существовать до nginx -t: vhost'ы на них ссылаются.
+        confd = Path("/etc/nginx/conf.d")
+        self.ensure_dir(confd, 0o755)
+        self.write_file(confd / "zz-ratelimit.conf", RATE_LIMIT_CONF, 0o644)
 
         to_issue = []
         for domain, backend in sites.items():
@@ -1870,6 +1963,13 @@ server {{
         active = self.run(["systemctl", "list-timers", "--no-legend", "--plain"], check=False).stdout or ""
         marks = [u for u in CORE_TIMERS if u in active]
         print(f"  {C_DIM}·{C_RESET} таймеров активно: {len(marks)}/{len(CORE_TIMERS)}")
+
+        f2b = self.run(["systemctl", "is-active", "fail2ban"], check=False).stdout.strip()
+        print(f"  {C_DIM}·{C_RESET} fail2ban: {f2b or 'ERR'}")
+        limited = Path("/etc/nginx/conf.d/zz-ratelimit.conf").is_file()
+        print(f"  {C_DIM}·{C_RESET} nginx rate-limit: {'да' if limited else 'нет'}")
+        if f2b != "active" and not self.args.skip_tls:
+            warn("fail2ban не активен — SSH без rate-limit защиты")
 
         if not healthy:
             self.failed.append("не все контейнеры здоровы")

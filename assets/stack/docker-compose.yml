@@ -1,15 +1,17 @@
 services:
   litellm:
-    image: ghcr.io/berriai/litellm:v1.105.1   # was main-latest (rolling dev tag: now ships 1.107.0-dev); pinned to newest stable release 2026-10-17
+    image: ghcr.io/berriai/litellm:v1.106.6   # was main-latest (rolling dev tag); pinned to newest stable release 2026-10-28 (chatgpt/ subscription provider needs >=1.106)
     container_name: litellm
     restart: always
     command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
+      - /root/litellm-chatgpt:/tokens          # ChatGPT/Codex OAuth (chatgpt/ provider); must stay writable — refresh token rotates
     ports:
       - "127.0.0.1:4000:4000"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      CHATGPT_TOKEN_DIR: /tokens
       DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD}@host.docker.internal:5432/litellm_db
       STORE_MODEL_IN_DB: "True"
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
@@ -141,6 +143,62 @@ services:
     networks:
       - stack-net
 
+  # Песочница для пользователей Open WebUI: не-root, без docker.sock и без монтирования хоста.
+  # Плата за изоляцию — общий /workspace на всех, кто ходит в этот сервер.
+  open-terminal-sandbox:
+    build:
+      context: ./arduino-sandbox
+    image: esmien/open-terminal-arduino:local
+    container_name: open-terminal-sandbox
+    restart: always
+    user: "1000:1000"
+    command: ["run", "--cwd", "/workspace"]
+    mem_limit: 2g
+    memswap_limit: 2g      # без до-свапа: 2× лимита свопа → трэшинг вместо чистого OOM-kill + restart
+    cpus: "1.0"
+    pids_limit: 256
+    cap_drop: ["ALL"]
+    # python3-ot в образе несёт файловую capability cap_setgid; с полностью
+    # пустым permitted-набором exec падает с EPERM, поэтому возвращаем ровно её.
+    cap_add: ["SETGID"]
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    volumes:
+      - ot_sandbox_workspace:/workspace
+      - ot_sandbox_home:/home/user
+      # Личный каталог песочницы на хосте: uid 1000 владеет им целиком (0700), поэтому
+      # агент свободно создаёт/правит/удаляет свои файлы. Общий webui_data/uploads сюда
+      # НЕ монтируется — в нём лежат вложения всех пользователей WebUI.
+      # Файл из чата кладёт владелец хоста: sandbox-inbox <file> (chown 1000:1000, 0600).
+      - /home/ai_service/sandbox_files:/workspace/inbox
+    environment:
+      OPEN_TERMINAL_API_KEY: ${OPEN_TERMINAL_SANDBOX_API_KEY}
+      HOME: /home/user
+      # Каталог arduino-cli живёт на записываемом volume: /home/user/.arduino15
+      # в образе принадлежит root и поставить туда ядро из-под uid 1000 нельзя.
+      ARDUINO_DIRECTORIES_DATA: /workspace/.arduino15
+      ARDUINO_DIRECTORIES_USER: /workspace/Arduino
+      # /tmp — tmpfs с noexec, а arduino-cli несёт PyInstaller-бутлоадер: он распаковывает
+      # себе .so в TMPDIR и падает на noexec с «failed to map segment from shared object».
+      # Каталог на volume заодно не упирается в 256 МБ tmpfs.
+      TMPDIR: /workspace/.tmp
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -m 4 http://127.0.0.1:8000/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - stack-net
+
   searxng:
     image: searxng/searxng:latest
     container_name: searxng
@@ -192,6 +250,8 @@ services:
 
 volumes:
   searxng_data:
+  ot_sandbox_workspace:
+  ot_sandbox_home:
 
 networks:
   stack-net:

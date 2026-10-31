@@ -100,7 +100,14 @@ install.py --dry-run           # показать план
 ```
 
 Шаги: `preflight, packages, users, stack, secrets, bundle, fetch, postgres,
-network, images, migrate, restore, apps, notifications, units, tls, verify, hermes`.
+network, images, migrate, restore, apps, notifications, units, hardening, tls,
+verify, hermes`.
+
+`hardening` ставит fail2ban (jail.local: sshd, бан 1д+, повторным — до 4 недель,
+`ignoreip` включает docker-сети) и кладёт nginx-зоны rate-limit
+(`/etc/nginx/conf.d/zz-ratelimit.conf`). Лимиты: `llm.` — весь API 10 r/s,
+`ai.` — только `/api/` 8 r/s (статика WebUI намеренно без лимита: иначе F5
+со сотней чанков получает 429 и страница не грузится). Сверх лимита — 429.
 
 ## Что идемпотентно
 

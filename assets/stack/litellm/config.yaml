@@ -25,6 +25,11 @@ router_settings:
   allowed_fails: 2        # Исключить ключ после первой ошибки 429
   cooldown_time: 60      # Заморозка ключа на 1 минуту
   routing_strategy: simple-shuffle # ротирует ключи активной модели, пока не исчерпаются, потом падает на fallback-модель
+  # Argon: бесплатный Tokenator — основной, при таймауте (90 с, задан на деплойментах)
+  # запрос уходит на OpenCode-маршрут. Остальные модели без fallback.
+  fallbacks:
+    - google/gemini-4-argon: ["opencode/gemini-4-argon"]
+    - openai/gpt-6-luna: ["opencode/gpt-6-luna"]
 
 #litellm_settings:
 #  model_group_settings:
