@@ -188,6 +188,7 @@ STEP_NAMES = [s[0] for s in STEPS]
 # Юниты, которые ставит установщик (из assets/host/systemd).
 CORE_TIMERS = [
     "deadman-ping.timer",
+    "uptime-heartbeat.timer",
     "docker-autorecover.timer",
     "docker-detector-liveness.timer",
     "litellm-spend-retention.timer",
@@ -214,6 +215,7 @@ HERMES_UNITS = [
 
 HOST_BIN_SCRIPTS = [
     "deadman-ping.sh",
+    "uptime-heartbeat.sh",
     "docker-detector-liveness.sh",
     "docker-incident-agent.sh",
     "docker-incident-detector.py",

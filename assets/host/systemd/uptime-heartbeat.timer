@@ -1,0 +1,10 @@
+[Unit]
+Description=Monthly repo heartbeat (GitHub disables scheduled workflows after 60 idle days)
+
+[Timer]
+OnCalendar=*-*-01 03:00:00
+Persistent=true
+Unit=uptime-heartbeat.service
+
+[Install]
+WantedBy=timers.target

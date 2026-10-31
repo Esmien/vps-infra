@@ -1,0 +1,7 @@
+[Unit]
+Description=Keep GitHub Actions scheduled workflow enabled (monthly repo activity)
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/uptime-heartbeat.sh
