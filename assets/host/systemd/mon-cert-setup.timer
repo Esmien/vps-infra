@@ -1,10 +1,10 @@
 [Unit]
-Description=Retry mon.<domain> certificate every 30 min until issued
+Description=Retry mon.<domain> certificate: точный заход на сброс лимита LE (reset+4s)
 
 [Timer]
-OnActiveSec=5min
-OnUnitActiveSec=30min
-AccuracySec=1min
+OnActiveSec=60s
+OnUnitActiveSec=2min
+AccuracySec=5s
 Unit=mon-cert-setup.service
 
 [Install]
