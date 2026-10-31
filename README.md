@@ -100,7 +100,7 @@ install.py --dry-run           # показать план
 ```
 
 Шаги: `preflight, packages, users, stack, secrets, bundle, fetch, postgres,
-network, images, migrate, restore, apps, notifications, units, hardening, tls,
+network, images, migrate, restore, apps, notifications, beszel, units, hardening, tls,
 verify, hermes`.
 
 `hardening` ставит fail2ban (jail.local: sshd, бан 1д+, повторным — до 4 недель,
@@ -179,6 +179,23 @@ maintainer/                 авто-коммит/пуш репозитория 
 * Админка LiteLLM — `https://<llm-домен>` с `UI_USERNAME`/`UI_PASSWORD`.
 * Бэкапы БД — ежедневно, `systemctl list-timers postgres-backup.timer`.
 * Мониторинг — `systemctl status server-monitor-bot server-monitor-events`.
+
+### Beszel — графики и пороги (шаг `beszel`)
+
+Лёгкий мониторинг хоста: hub + агент в Docker, на этой машине вместе ~20 МБ RAM.
+Hub слушает только `127.0.0.1:8090`, наружу не публикуется.
+
+* Файлы: `/home/ai_service/beszel/{docker-compose.yml,.env}`, данные в `beszel_data/`.
+* Связка hub↔агент — **unix-сокет** `beszel_socket/beszel.sock` (SSH-ключи не нужны).
+  `KEY` в `.env` — публичный ключ хаба (`beszel_data/id_ed25519`), `TOKEN` — токен
+  системы из коллекции `fingerprints` (в UI создаётся сам, при ручной настройке:
+  `ssh-keygen -y -f beszel_data/id_ed25519`).
+* Алерты: `Status` (упал), `CPU>85`/10 мин, `Memory>90`/10 мин, `Disk>85`/30 мин,
+  доставка — webhook `telegram://<BOT_TOKEN>@telegram?chats=<chat_id>&parseMode=HTML`
+  в `user_settings.settings.webhooks` (токен хранится только в локальной БД).
+* Доступ снаружи: нужна A-запись (например `mon.<domain>`), затем vhost + certbot.
+  Пока DNS нет — SSH-туннель: `ssh -L 8090:127.0.0.1:8090 root@<ip>` → `http://localhost:8090`.
+* Логин админа — `/etc/beszel-admin.env` (0600 root).
 
 ### Внешний мониторинг: GitHub Actions (работает из коробки)
 

@@ -177,6 +177,7 @@ STEPS: list[tuple[str, str]] = [
     ("data", "Файлы WebUI из Telegram-бота"),
     ("apps", "Запуск стека"),
     ("notifications", "Telegram-мониторинг"),
+    ("beszel", "Beszel (графики и пороги)"),
     ("units", "systemd-юниты и таймеры"),
     ("hardening", "fail2ban и anti-flood"),
     ("tls", "Nginx + сертификаты"),
@@ -1800,6 +1801,30 @@ server {{
             return False
         public = self.cfg.get("public_ip") or self.public_ip()
         return bool(public) and resolved == public
+
+    def step_beszel(self) -> None:
+        step("Beszel (графики и пороги)")
+        target = Path("/home/ai_service/beszel")
+        self.ensure_dir(target, 0o755, AI_USER)
+        self.sync_tree(ASSETS / "stack" / "beszel", target, AI_USER, skip=(".env", "__pycache__", ".git"))
+        # .env с TOKEN/KEY заполняется один раз после добавления системы в UI —
+        # перезаписывать его нельзя, иначе агент потеряет регистрацию.
+        env = target / ".env"
+        if not env.exists() and not self.dry:
+            env.write_text("TOKEN=\nKEY=\n")
+            os.chmod(env, 0o600)
+        if self.dry:
+            info("[dry-run] docker compose up -d beszel (hub)")
+            return
+        self.run(["docker", "compose", "up", "-d", "beszel"], cwd=target, check=False, timeout=300)
+        res = self.run(["curl", "-fsS", "-m", "5", "-o", "/dev/null", "-w", "%{http_code}",
+                        "http://127.0.0.1:8090/"], check=False)
+        if (res.stdout or "").strip() == "200":
+            ok("Beszel hub отвечает на 127.0.0.1:8090")
+        else:
+            warn("Beszel hub не отвечает — docker logs beszel")
+        if not any(l.startswith("TOKEN=") and l.strip() != "TOKEN=" for l in env.read_text().splitlines()):
+            info("агент не запущен: добавь систему в UI (host /beszel_socket/beszel.sock) и впиши TOKEN/KEY в .env")
 
     def step_hardening(self) -> None:
         step("fail2ban и anti-flood")
