@@ -1,0 +1,11 @@
+[Unit]
+Description=Dead-man switch timer (every 5 min)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=deadman-ping.service
+
+[Install]
+WantedBy=timers.target

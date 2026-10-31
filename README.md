@@ -179,3 +179,22 @@ maintainer/                 авто-коммит/пуш репозитория 
 * Админка LiteLLM — `https://<llm-домен>` с `UI_USERNAME`/`UI_PASSWORD`.
 * Бэкапы БД — ежедневно, `systemctl list-timers postgres-backup.timer`.
 * Мониторинг — `systemctl status server-monitor-bot server-monitor-events`.
+
+### Внешний dead-man switch
+
+Внутренний мониторинг живёт на этой же машине и умирает вместе с ней. Чтобы
+узнавать о полном падении (хост, сеть, провайдер), есть `deadman-ping.timer`:
+раз в 5 минут пингует внешний чек-сервис (healthchecks.io и совместимые),
+пока стек жив; если контейнер не `healthy` / nginx / fail2ban лежит — пинг идёт
+на `<url>/fail`, и алерт приходит сразу, а не через grace.
+
+Подключение (вручную, один раз — сервис внешний, нужен аккаунт):
+
+1. healthchecks.io → создать чек: `Period = 15 min`, `Grace = 5 min`,
+   интеграция уведомлений — Telegram (или e-mail).
+2. Положить ping-URL в `/etc/deadman-ping.url` (0640 root) или строкой
+   `DEADMAN_URL=<url>` в `/home/ai_service/notifications/.env`.
+3. Проверка: `systemctl start deadman-ping.service; journalctl -u deadman-ping -n 5`
+   и «Last ping» в кабинете healthchecks.
+
+Без URL скрипт молча выходит (код 0) — таймер можно держать включённым всегда.

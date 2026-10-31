@@ -187,6 +187,7 @@ STEP_NAMES = [s[0] for s in STEPS]
 
 # Юниты, которые ставит установщик (из assets/host/systemd).
 CORE_TIMERS = [
+    "deadman-ping.timer",
     "docker-autorecover.timer",
     "docker-detector-liveness.timer",
     "litellm-spend-retention.timer",
@@ -212,6 +213,7 @@ HERMES_UNITS = [
 ]
 
 HOST_BIN_SCRIPTS = [
+    "deadman-ping.sh",
     "docker-detector-liveness.sh",
     "docker-incident-agent.sh",
     "docker-incident-detector.py",
@@ -1662,6 +1664,12 @@ GROUP BY end_user ORDER BY total_spend DESC LIMIT 100;
         if not tg.get("bot_token"):
             timers.remove("postgres-backup-notify.timer")
         units = timers + CORE_SERVICES
+        # Таймеру нужен его .service в /etc/systemd/system, иначе systemd
+        # отказывается стартовать таймер («unit to trigger not loaded»).
+        for t in timers:
+            svc = t.replace(".timer", ".service")
+            if (ASSETS / "host" / "systemd" / svc).is_file() and svc not in units:
+                units.append(svc)
         enable = list(timers) + list(CORE_SERVICES)
         if tg.get("bot_token"):
             units += NOTIFY_SERVICES

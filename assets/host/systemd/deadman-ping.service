@@ -1,0 +1,11 @@
+[Unit]
+Description=Dead-man switch ping (external uptime check)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/deadman-ping.sh
+Nice=5
+TimeoutStartSec=60
