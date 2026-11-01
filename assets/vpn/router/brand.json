@@ -1,0 +1,19 @@
+{
+  "brand": "Esmien VPN",
+  "host": "ai.esmien.qd.je",
+  "cert_dir": "/etc/letsencrypt/live/ai.esmien.qd.je",
+  "port": 8443,
+  "alt_port": 2087,
+  "paths": {
+    "owner": "/ws",
+    "general": "/general",
+    "france": "/france",
+    "test": "/test"
+  },
+  "upstreams": {
+    "/ws": 10081,
+    "/general": 10082,
+    "/france": 10083,
+    "/test": 10084
+  }
+}
