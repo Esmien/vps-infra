@@ -20,9 +20,9 @@ PORT = _BRAND["port"]
 ROOT = Path("/var/www/esmien-sub")
 UID_FILE = Path("/root/mtproto-faketls/ws-client-uuid")
 
-EE = "🇪🇪 Эстония (General)"
-FR = "🇫🇷 Франция (Gemini)"
-TEST = "🛠 Test (Develop)"
+EE = "🇪🇪 Esmien EE (General)"
+FR = "🇫🇷 Esmien FR (Gemini)"
+TEST = "🛠 Esmien TEST (Develop)"
 
 
 def vless(uid: str, path: str, tag: str) -> str:
@@ -51,9 +51,9 @@ def clash_proxy(uid: str, name: str, path: str) -> str:
 
 
 def build(token_dir: Path, uid: str) -> None:
-    links = [vless(uid, _BRAND["paths"]["general"], "Esmien VPN · Эстония (General)"),
-             vless(uid, _BRAND["paths"]["france"], "Esmien VPN · Франция (Gemini)"),
-             vless(uid, _BRAND["paths"]["test"], "Esmien VPN · Test (Develop)")]
+    links = [vless(uid, _BRAND["paths"]["general"], EE),
+             vless(uid, _BRAND["paths"]["france"], FR),
+             vless(uid, _BRAND["paths"]["test"], TEST)]
     (token_dir / "list.txt").write_text(base64.b64encode(("\n".join(links) + "\n").encode()).decode() + "\n")
 
     (token_dir / "clash.yaml").write_text(f"""# Esmien VPN — 2 маршрута

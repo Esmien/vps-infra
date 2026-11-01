@@ -36,6 +36,9 @@ TEMPLATE = """server {{
         try_files /$esmien_sub_token/$esmien_sub_file =404;
         default_type text/plain;
         add_header Cache-Control "no-store";
+        add_header profile-title "Esmien VPN";
+        add_header profile-update-interval 12;
+        add_header Content-Disposition "inline; filename=esmien-vpn";
     }}
 }}
 """
@@ -54,9 +57,10 @@ LOCATION = """    location {path} {{
 """
 
 
-def render(port: int) -> str:
+def render(port: int, host: str = HOST, cert: str = CERT) -> str:
     locations = "\n".join(LOCATION.format(path=path, upstream=up) for path, up in UPSTREAMS)
-    return TEMPLATE.format(port=port, host=HOST, cert=CERT, logname=port, locations=locations.rstrip("\n"))
+    logname = str(port) if host == HOST else f"{port}-{host.split('.')[0]}"
+    return TEMPLATE.format(port=port, host=host, cert=cert, logname=logname, locations=locations.rstrip("\n"))
 
 
 def main() -> int:
@@ -64,6 +68,14 @@ def main() -> int:
         target = Path(f"/etc/nginx/conf.d/vpn-{port}.conf")
         target.write_text(render(port))
         print(f"written {target} (server_name {HOST}, cert {CERT})")
+    legacy = CONF.get("legacy_hosts", {})
+    compat = [render(port, host, cert) for host, cert in legacy.items() for port in PORTS]
+    compat_path = Path("/etc/nginx/conf.d/vpn-compat.conf")
+    if compat:
+        compat_path.write_text("\n".join(compat))
+        print(f"written {compat_path} (legacy hosts: {', '.join(legacy)})")
+    elif compat_path.exists():
+        compat_path.unlink()
     subprocess.run(["python3", str(BASE / "make_sub.py")], check=False)
     print("done: nginx -t && systemctl reload nginx")
     return 0
