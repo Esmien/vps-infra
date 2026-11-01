@@ -1,0 +1,7 @@
+[Unit]
+Description=VPN router failover (fr exit -> direct fallback)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /root/vpn-router/failover.py
