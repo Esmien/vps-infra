@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Generate the Esmien VPN subscription bundle (clash.yaml / list.txt / singbox.json).
 
+Nodes:
+  * our own routes on HOST (/general, /france, /fi, /test) plus every upstream node
+    relayed through our server (/p<i>, see relay_nodes.json);
+  * whitelist (RU entry) nodes taken verbatim from whitelist_links.json — those
+    bypass our server on purpose, so they survive when only RU addresses pass.
+
 Usage:
     python3 make_sub.py            # rewrite existing token dirs
     python3 make_sub.py --new      # create a new token dir
-
-Routes: /general -> Estonia (direct exit), /france -> France (external exit).
-nginx serves https://mon.esmien.qd.je:8443/sub/<token> and picks the format by User-Agent.
 """
 import base64
 import json
@@ -19,10 +22,14 @@ HOST = _BRAND["host"]
 PORT = _BRAND["port"]
 ROOT = Path("/var/www/esmien-sub")
 UID_FILE = Path("/root/mtproto-faketls/ws-client-uuid")
+RELAY_FILE = Path("/root/vpn-router/relay_nodes.json")
+WHITE_FILE = Path("/root/vpn-router/whitelist_links.json")
 
 EE = "🇪🇪 Эстония (General)"
 FR = "🇫🇷 Франция (Gemini)"
+FI = "🇫🇮 Финляндия (Gemini резерв)"
 TEST = "🛠 Тест (Develop)"
+WHITE_GROUP = "🛡 Белые списки"
 
 
 def vless(uid: str, path: str, tag: str) -> str:
@@ -31,7 +38,7 @@ def vless(uid: str, path: str, tag: str) -> str:
 
 
 def clash_proxy(uid: str, name: str, path: str) -> str:
-    return f"""  - name: "{name}"
+    return f"""  - name: {json.dumps(name, ensure_ascii=False)}
     type: vless
     server: {HOST}
     port: {PORT}
@@ -50,14 +57,57 @@ def clash_proxy(uid: str, name: str, path: str) -> str:
 """
 
 
+def clash_proxy_from_link(link: str, name: str) -> str:
+    """Proxy entry for an upstream link the client must reach directly (whitelist)."""
+    u = urllib.parse.urlparse(link)
+    q = dict(urllib.parse.parse_qsl(u.query))
+    net = q.get("type", "tcp")
+    sec = q.get("security", "none")
+    body = (f"  - name: {json.dumps(name, ensure_ascii=False)}\n    type: {u.scheme}\n"
+            f"    server: {u.hostname}\n    port: {u.port}\n")
+    if u.scheme == "vless":
+        body += f"    uuid: {urllib.parse.unquote(u.username or '')}\n    udp: true\n"
+        if q.get("flow"):
+            body += f"    flow: {q['flow']}\n"
+    else:
+        body += f"    password: {urllib.parse.unquote(u.username or '')}\n    udp: true\n"
+    body += f"    network: {net}\n    tls: {str(sec in ('tls', 'reality')).lower()}\n"
+    if sec in ("tls", "reality"):
+        body += f"    sni: {q.get('sni') or u.hostname}\n    client-fingerprint: {q.get('fp', 'chrome')}\n"
+        if q.get("alpn"):
+            body += f"    alpn: [{q['alpn']}]\n"
+    if sec == "reality":
+        body += f"    reality-opts:\n      public-key: {q.get('pbk', '')}\n      short-id: {q.get('sid', '')}\n"
+    if net == "grpc":
+        body += f"    grpc-opts:\n      grpc-service-name: {q.get('serviceName', '')}\n"
+    elif net == "ws":
+        body += (f"    ws-opts:\n      path: {json.dumps(q.get('path', '/'))}\n"
+                 f"      headers:\n        Host: {q.get('host', u.hostname)}\n")
+    return body
+
+
+def load_nodes():
+    relay = json.loads(RELAY_FILE.read_text()) if RELAY_FILE.exists() else []
+    white = json.loads(WHITE_FILE.read_text()) if WHITE_FILE.exists() else []
+    return relay, white
+
+
 def build(token_dir: Path, uid: str) -> None:
-    links = [vless(uid, _BRAND["paths"]["general"], EE),
-             vless(uid, _BRAND["paths"]["france"], FR),
-             vless(uid, _BRAND["paths"]["test"], TEST)]
+    relay, white = load_nodes()
+    ours = [(EE, _BRAND["paths"]["general"]), (FR, _BRAND["paths"]["france"]),
+            (FI, _BRAND["paths"]["fi"]), (TEST, _BRAND["paths"]["test"])]
+    ours += [(n["name"], n["path"]) for n in relay]
+
+    links = [vless(uid, path, name) for name, path in ours] + [w["link"] for w in white]
     (token_dir / "list.txt").write_text(base64.b64encode(("\n".join(links) + "\n").encode()).decode() + "\n")
 
-    (token_dir / "clash.yaml").write_text(f"""# Esmien VPN — 2 маршрута
-# Эстония (General) — обычный трафик; Франция (Gemini) — Google (иначе Gemini упирается в страну)
+    ours_proxies = "".join(clash_proxy(uid, name, path) for name, path in ours)
+    white_proxies = "".join(clash_proxy_from_link(w["link"], w["name"]) for w in white)
+    ours_names = "".join(f'      - {json.dumps(n, ensure_ascii=False)}\n' for n, _ in ours)
+    white_names = "".join(f'      - {json.dumps(w["name"], ensure_ascii=False)}\n' for w in white)
+
+    (token_dir / "clash.yaml").write_text(f"""# Esmien VPN
+# Маршруты через наш сервер + отдельная группа «Белые списки» (напрямую, мимо нашего сервера)
 mixed-port: 7890
 allow-lan: false
 mode: rule
@@ -72,15 +122,14 @@ dns:
   nameserver: [1.1.1.1, 8.8.8.8]
 
 proxies:
-{clash_proxy(uid, EE, _BRAND["paths"]["general"])}{clash_proxy(uid, FR, _BRAND["paths"]["france"])}{clash_proxy(uid, TEST, _BRAND["paths"]["test"])}
-proxy-groups:
+{ours_proxies}{white_proxies}proxy-groups:
   - name: "Esmien VPN"
     type: select
     proxies:
-      - "{EE}"
-      - "{FR}"
-      - "{TEST}"
-
+{ours_names}  - name: "{WHITE_GROUP}"
+    type: select
+    proxies:
+{white_names}
 rules:
   - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
   - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
@@ -96,14 +145,39 @@ rules:
   - MATCH,{EE}
 """)
 
-    def sb(name: str, path: str) -> dict:
+    def sb_ours(name: str, path: str) -> dict:
         return {"type": "vless", "tag": name, "server": HOST, "server_port": PORT, "uuid": uid,
                 "transport": {"type": "ws", "path": path, "headers": {"Host": HOST}},
                 "tls": {"enabled": True, "server_name": HOST}}
 
+    def sb_link(link: str, name: str) -> dict:
+        u = urllib.parse.urlparse(link)
+        q = dict(urllib.parse.parse_qsl(u.query))
+        net = q.get("type", "tcp")
+        out = {"type": u.scheme, "tag": name, "server": u.hostname, "server_port": u.port}
+        if u.scheme == "vless":
+            out["uuid"] = urllib.parse.unquote(u.username or "")
+        else:
+            out["password"] = urllib.parse.unquote(u.username or "")
+        if q.get("flow"):
+            out["flow"] = q["flow"]
+        if net == "grpc":
+            out["transport"] = {"type": "grpc", "service_name": q.get("serviceName", "")}
+        elif net == "ws":
+            out["transport"] = {"type": "ws", "path": q.get("path", "/"),
+                                "headers": {"Host": q.get("host", u.hostname)}}
+        if q.get("security") in ("tls", "reality"):
+            out["tls"] = {"enabled": True, "server_name": q.get("sni") or u.hostname,
+                          "utls": {"enabled": True, "fingerprint": q.get("fp", "chrome")}}
+            if q.get("security") == "reality":
+                out["tls"]["reality"] = {"enabled": True, "public_key": q.get("pbk", ""),
+                                         "short_id": q.get("sid", "")}
+        return out
+
     sing = {"log": {"level": "warn"},
             "inbounds": [{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}],
-            "outbounds": [sb(EE, _BRAND["paths"]["general"]), sb(FR, _BRAND["paths"]["france"]), sb(TEST, _BRAND["paths"]["test"]), {"type": "direct", "tag": "direct"}],
+            "outbounds": [sb_ours(n, p) for n, p in ours] + [sb_link(w["link"], w["name"]) for w in white]
+                         + [{"type": "direct", "tag": "direct"}],
             "route": {"rules": [
                 {"domain_suffix": ["google.com", "googleapis.com", "gstatic.com",
                                    "googleusercontent.com", "withgoogle.com"], "outbound": FR},
