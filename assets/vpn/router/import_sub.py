@@ -9,6 +9,7 @@ Usage: import_sub.py /root/sub_server.b64
 """
 import base64
 import json
+import os
 import re
 import shutil
 import sys
@@ -23,7 +24,7 @@ BRAND = Path("/root/vpn-router/brand.json")
 RELAY = Path("/root/vpn-router/relay_nodes.json")
 WHITE = Path("/root/vpn-router/whitelist_links.json")
 BASE_PORT = 10100
-WHITELIST_RE = re.compile(r"Москв|СПБ|Новосиб|Росси|РФ", re.I)
+WHITELIST_RE = re.compile(os.environ.get("WHITELIST_RE", "Москв|СПБ|Новосиб|Росси|РФ"), re.I)
 
 
 def decode(raw: bytes) -> str:
