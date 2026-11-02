@@ -44,6 +44,9 @@ TEMPLATE = """server {{
 """
 
 PANEL_LOCATION = """    location /panel/ {{
+        limit_req zone=xui_panel burst=5 nodelay;
+        limit_req_status 429;
+        limit_conn conn_per_ip 20;
         proxy_pass http://127.0.0.1:{upstream};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
