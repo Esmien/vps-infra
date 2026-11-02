@@ -43,6 +43,21 @@ TEMPLATE = """server {{
 }}
 """
 
+PANEL_LOCATION = """    location /panel/ {{
+        proxy_pass http://127.0.0.1:{upstream};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }}
+"""
+
 LOCATION = """    location {path} {{
         proxy_pass http://127.0.0.1:{upstream};
         proxy_http_version 1.1;
@@ -58,7 +73,9 @@ LOCATION = """    location {path} {{
 
 
 def render(port: int, host: str = HOST, cert: str = CERT) -> str:
-    locations = "\n".join(LOCATION.format(path=path, upstream=up) for path, up in UPSTREAMS)
+    locations = "\n".join(
+        (PANEL_LOCATION if path == "/panel/" else LOCATION).format(path=path, upstream=up)
+        for path, up in UPSTREAMS)
     logname = str(port) if host == HOST else f"{port}-{host.split('.')[0]}"
     return TEMPLATE.format(port=port, host=host, cert=cert, logname=logname, locations=locations.rstrip("\n"))
 
