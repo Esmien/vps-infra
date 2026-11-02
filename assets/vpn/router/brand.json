@@ -8,13 +8,15 @@
     "owner": "/ws",
     "general": "/general",
     "france": "/france",
-    "test": "/test"
+    "test": "/test",
+    "lte": "/lte"
   },
   "upstreams": {
     "/ws": 10081,
     "/general": 10082,
     "/france": 10083,
-    "/test": 10084
+    "/test": 10084,
+    "/lte": 10085
   },
   "legacy_hosts": {
     "ai.esmien.qd.je": "/etc/letsencrypt/live/ai.esmien.qd.je",
