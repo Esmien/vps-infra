@@ -1,0 +1,8 @@
+[Unit]
+Description=VPN subscription expiry reminders (Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /root/vpn-router/sub_expiry.py

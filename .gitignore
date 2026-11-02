@@ -14,3 +14,7 @@ __pycache__/
 venv/
 *.bak.*
 .DS_Store
+assets/vpn/router/subs.json
+assets/vpn/router/sub_expiry_state.json
+assets/vpn/router/relay_nodes.json
+assets/vpn/router/whitelist_links.json
