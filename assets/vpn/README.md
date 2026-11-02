@@ -1,36 +1,68 @@
-# VPN: VLESS over WebSocket + TLS (entry) -> foreign exit
+# VPN: VLESS over WebSocket + TLS (вход) -> внешние выходы
 
-Зачем: домашний провайдер режет 443 и fake-TLS до IP этого сервера, поэтому
-вход работает на нестандартных портах с настоящим TLS (сертификат Let's Encrypt
-на mon.esmien.qd.je), а Google-трафик и, при необходимости, весь трафик уходит
-через внешний exit.
+Домашний провайдер режет 443 и fake-TLS/MTProto, но пропускает настоящий TLS на
+нестандартных портах. Поэтому вход — VLESS+WS за nginx с сертификатом Let's Encrypt,
+а внешние выходы подключаются как outbound'ы Xray.
 
 ## Схема
 
-    клиент -> nginx (TLS, 8443 / 2087) -> xray vpn-router (VLESS+WS, 127.0.0.1:10081)
-           -> outbound "fr" (внешний exit) либо "direct" (этот сервер)
+    клиент -> nginx (TLS, 8443 / 2087) -> xray vpn-router (VLESS+WS, 127.0.0.1:1008x)
+           -> outbound: наш выход (direct) / внешний узел (p1..p23) / fr / fi
 
-- 8443 - основной вход, 2087 - резервный (если провайдер заблокирует 8443).
-- `vpn-router` - отдельный контейнер xray-core, конфиг /root/vpn-router/config.json.
-- TLS терминирует nginx; xray слушает только loopback и видит обычный /ws.
+- 8443 — основной вход, 2087 — резервный.
+- `vpn-router` — контейнер xray-core с `--network host`, конфиг `/root/vpn-router/config.json`.
+- TLS терминирует nginx; Xray слушает только loopback.
+- 3x-ui в схеме не участвует: панель не умеет описывать цепочки «вход → конкретный выход».
 
-## Маршрутизация
+## Два пула
 
-- private/geoip и bittorrent -> blocked
-- Google (geosite:google + IP-диапазоны) -> fr
-- по умолчанию -> fr (без этого Gemini отдаёт заглушку по стране:
-  частичная маршрутизация не проходит, нужен полный туннель)
-- failover: `vpn-failover.timer` каждые 2 минуты проверяет TCP до exit;
-  2 неудачи подряд -> переключает default на direct, 2 успеха -> обратно на fr
+1. **Пул через наш сервер** (`/general`, `/france`, `/fi`, `/test`, `/p<i>`): клиент идёт
+   к нам, мы выпускаем трафик через нужный узел. Это основная подписка.
+2. **Белые списки** (`router/whitelist_links.json`): узлы с РФ-входом отдаются клиенту
+   **напрямую**, минуя наш сервер, отдельной подпиской — иначе первый хоп (наш
+   зарубежный IP) отваливается первым же при блокировках.
 
-## Восстановление
+## Gemini
 
-1. `docker run -d --name vpn-router --restart unless-stopped --user 0:0    -p 127.0.0.1:10081:10081 -v /root/vpn-router/config.json:/etc/xray/config.json:ro    ghcr.io/xtls/xray-core:latest run -c /etc/xray/config.json`
-2. конфиг: `router/config.template.json` -> подставить VLESS_UUID/FR_EXIT_HOST/TROJAN_PASSWORD.
-3. nginx: `nginx/vpn-8443.conf`, `nginx/vpn-2087.conf` -> /etc/nginx/conf.d/, `nginx -t && systemctl reload nginx`.
-4. unit-файлы из `systemd/` -> /etc/systemd/system/, `systemctl daemon-reload && systemctl enable --now vpn-failover.timer`.
-5. ссылка для клиента: `scripts/ws-link.py` (UUID читает из /root/mtproto-faketls/ws-client-uuid).
+Работает только через IP, который Google считает поддерживаемой страной — не через
+DNS и не через «правильную» локацию в названии тарифа. Проверка:
+
+    python3 /root/vpn-router/gemini_geo_check.py [socks5-host:port]
+
+`fr`, `fi`, `de` — ок; `ru` — заглушка. Наш эстонский сервер Google видит как `ru`.
+
+## Правка конфига
+
+    vpn-cfg status     # инбаунды/аутбаунды/дефолт + состояние контейнера
+    vpn-cfg edit       # открыть config.json (бэкап автоматически)
+    vpn-cfg apply      # валидация + перезапуск + health-check трёх маршрутов
+    vpn-cfg rollback   # откат на предыдущий бэкап
+
+## Развёртывание на новом сервере
+
+    bash scripts/deploy.sh vpn.example.com mail@example.com
+    python3 /root/vpn-router/import_sub.py <файл-подписки> [мёртвые индексы]
+
+`deploy.sh` ставит зависимости, генерирует конфиг из `router/config.template.json`,
+выпускает сертификат, поднимает контейнер, рендерит nginx и печатает ссылку подписки.
+
+Шаблон конфига пересобирается из живого файла: `router/make_template.py` (маскирует
+креды, выкидывает импортированные ретрансляторы).
+
+## Реальный IP за stream
+
+443-вход: `stream { listen 443; ssl_preread on; proxy_pass <backend>; proxy_protocol on; }`,
+сайты слушают `127.0.0.1:9443 proxy_protocol ssl`. Лишний промежуточный хоп превращает
+все адреса в логах в `127.0.0.1` — тогда fail2ban бесполезен.
 
 ## Секреты
 
-В репозиторий не попадают: UUID клиента, пароль внешнего exit. Живут только на хосте.
+В репозиторий не попадают: UUID клиента, пароли внешних выходов, ссылки подписок
+(`whitelist_links.json`, `relay_nodes.json` с кредами). Живут только на хосте.
+
+## Legacy
+
+`failover.py`, `provision_vpn_host.py`, `certbot_retry.py`, `systemd/vpn-failover.*` —
+одноразовые сценарии прошлой схемы (авто-переключение выхода, отложенный выпуск
+сертификата). В текущей схеме не используются: фолбэк отключён сознательно, чтобы
+падение выхода было видно сразу.

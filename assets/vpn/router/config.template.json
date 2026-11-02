@@ -1,13 +1,11 @@
 {
  "log": {
-  "loglevel": "info",
-  "access": "/tmp/access2.log",
-  "error": "/tmp/error2.log"
+  "loglevel": "warning"
  },
  "inbounds": [
   {
    "tag": "ws-in",
-   "listen": "0.0.0.0",
+   "listen": "127.0.0.1",
    "port": 10081,
    "protocol": "vless",
    "settings": {
@@ -38,18 +36,151 @@
      "courier.push.apple.com"
     ]
    }
+  },
+  {
+   "tag": "in-general",
+   "listen": "127.0.0.1",
+   "port": 10082,
+   "protocol": "vless",
+   "settings": {
+    "clients": [
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-general"
+     }
+    ],
+    "decryption": "none"
+   },
+   "streamSettings": {
+    "network": "ws",
+    "security": "none",
+    "wsSettings": {
+     "path": "/general"
+    }
+   },
+   "sniffing": {
+    "enabled": true,
+    "destOverride": [
+     "http",
+     "tls",
+     "quic"
+    ],
+    "routeOnly": false,
+    "domainsExcluded": [
+     "courier.push.apple.com"
+    ]
+   }
+  },
+  {
+   "tag": "in-france",
+   "listen": "127.0.0.1",
+   "port": 10083,
+   "protocol": "vless",
+   "settings": {
+    "clients": [
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-france"
+     }
+    ],
+    "decryption": "none"
+   },
+   "streamSettings": {
+    "network": "ws",
+    "security": "none",
+    "wsSettings": {
+     "path": "/france"
+    }
+   },
+   "sniffing": {
+    "enabled": true,
+    "destOverride": [
+     "http",
+     "tls",
+     "quic"
+    ],
+    "routeOnly": false,
+    "domainsExcluded": [
+     "courier.push.apple.com"
+    ]
+   }
+  },
+  {
+   "tag": "in-test",
+   "listen": "127.0.0.1",
+   "port": 10084,
+   "protocol": "vless",
+   "settings": {
+    "clients": [
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-test"
+     }
+    ],
+    "decryption": "none"
+   },
+   "streamSettings": {
+    "network": "ws",
+    "security": "none",
+    "wsSettings": {
+     "path": "/test"
+    }
+   },
+   "sniffing": {
+    "enabled": true,
+    "destOverride": [
+     "http",
+     "tls",
+     "quic"
+    ],
+    "routeOnly": false,
+    "domainsExcluded": [
+     "courier.push.apple.com"
+    ]
+   }
+  },
+  {
+   "tag": "in-fi",
+   "listen": "127.0.0.1",
+   "port": 10086,
+   "protocol": "vless",
+   "settings": {
+    "clients": [
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-fi"
+     }
+    ],
+    "decryption": "none"
+   },
+   "streamSettings": {
+    "network": "ws",
+    "security": "none",
+    "wsSettings": {
+     "path": "/fi"
+    }
+   },
+   "sniffing": {
+    "enabled": true,
+    "destOverride": [
+     "http",
+     "tls",
+     "quic"
+    ],
+    "routeOnly": false
+   }
   }
  ],
  "outbounds": [
   {
-   "tag": "fr",
+   "tag": "fi",
    "protocol": "trojan",
    "settings": {
     "servers": [
      {
-      "address": "<FR_EXIT_HOST>",
+      "address": "hels.sream-rutube.shop",
       "port": 443,
-      "password": "<TROJAN_PASSWORD>"
+      "password": "<PASSWORD>"
      }
     ]
    },
@@ -57,7 +188,35 @@
     "network": "grpc",
     "security": "tls",
     "tlsSettings": {
-     "serverName": "<FR_EXIT_HOST>",
+     "serverName": "hels.sream-rutube.shop",
+     "alpn": [
+      "h2"
+     ],
+     "fingerprint": "firefox"
+    },
+    "grpcSettings": {
+     "serviceName": "7519c7aaf7b2",
+     "multiMode": false
+    }
+   }
+  },
+  {
+   "tag": "fr",
+   "protocol": "trojan",
+   "settings": {
+    "servers": [
+     {
+      "address": "main.uimobile3.shop",
+      "port": 443,
+      "password": "<PASSWORD>"
+     }
+    ]
+   },
+   "streamSettings": {
+    "network": "grpc",
+    "security": "tls",
+    "tlsSettings": {
+     "serverName": "main.uimobile3.shop",
      "alpn": [
       "h2"
      ],
@@ -67,25 +226,6 @@
      "serviceName": "cd1d722dgrpc",
      "multiMode": false
     }
-   }
-  },
-  {
-   "tag": "warp",
-   "protocol": "wireguard",
-   "settings": {
-    "secretKey": "8PJjTIQUfdSA3P1q3pwE/cHaNLaTJr662yqj9rDyBHg=",
-    "address": [
-     "172.16.0.2/32",
-     "2606:4700:110:86d0:56e2:d1dd:1932:976b/128"
-    ],
-    "peers": [
-     {
-      "publicKey": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
-      "endpoint": "162.159.192.10:2408",
-      "keepAlive": 25
-     }
-    ],
-    "mtu": 1280
    }
   },
   {
@@ -116,6 +256,34 @@
     "protocol": [
      "bittorrent"
     ]
+   },
+   {
+    "type": "field",
+    "inboundTag": [
+     "in-france"
+    ],
+    "outboundTag": "fr"
+   },
+   {
+    "type": "field",
+    "inboundTag": [
+     "in-general"
+    ],
+    "outboundTag": "direct"
+   },
+   {
+    "type": "field",
+    "inboundTag": [
+     "in-test"
+    ],
+    "outboundTag": "direct"
+   },
+   {
+    "type": "field",
+    "inboundTag": [
+     "in-fi"
+    ],
+    "outboundTag": "fi"
    },
    {
     "type": "field",

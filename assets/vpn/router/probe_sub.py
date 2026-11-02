@@ -83,25 +83,20 @@ def main() -> int:
         (WORK / f"n{i}.json").write_text(json.dumps(cfg))
         plan.append(i)
 
-    subprocess.run(["docker", "cp", str(WORK) + "/.", "3xui:/tmp/probe"], check=True, capture_output=True)
-    subprocess.run(["docker", "cp", "/root/vpn-router/gemini_geo_check.py", "3xui:/tmp/ggc.py"],
-                   check=True, capture_output=True)
-
+    
     lines = ["#!/bin/sh"]
     for i in plan:
         p = 19400 + i
         lines.append(f"printf '%2d %-34s ' {i} '{names[i][:34]}'")
-        lines.append(f"/app/bin/xray-linux-amd64 run -c /tmp/probe/n{i}.json >/dev/null 2>&1 & pid=$!")
+        lines.append(f"xray run -c {WORK}/n{i}.json >/dev/null 2>&1 & pid=$!")
         lines.append("sleep 3")
         lines.append(f"ip=$(curl -sS --max-time 12 --socks5-hostname 127.0.0.1:{p} https://ipinfo.io/json 2>/dev/null | "
                      "python3 -c \"import sys,json;d=json.load(sys.stdin);print(d['ip'],d['country'],d['city'])\" 2>/dev/null)")
-        lines.append(f"geo=$(python3 /tmp/ggc.py 127.0.0.1:{p} 2>/dev/null | head -1)")
+        lines.append(f"geo=$(python3 /root/vpn-router/gemini_geo_check.py 127.0.0.1:{p} 2>/dev/null | head -1)")
         lines.append('echo "$ip | $geo"')
         lines.append("kill $pid 2>/dev/null; wait $pid 2>/dev/null")
     (WORK / "run.sh").write_text("\n".join(lines) + "\n")
-    subprocess.run(["docker", "cp", str(WORK / "run.sh"), "3xui:/tmp/probe/run.sh"], check=True, capture_output=True)
-    res = subprocess.run(["docker", "exec", "3xui", "sh", "/tmp/probe/run.sh"],
-                         capture_output=True, text=True, timeout=540)
+    res = subprocess.run(["sh", str(WORK / "run.sh")], capture_output=True, text=True, timeout=540)
     print(res.stdout)
     if res.returncode:
         print("stderr:", res.stderr[:300])
