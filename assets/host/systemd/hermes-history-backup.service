@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly offsite backup of Hermes history (state.db + sessions) to the Telegram file bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/hermes-history-backup.py
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=1800

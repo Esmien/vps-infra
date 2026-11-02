@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Hermes history backup weekly (Sunday 04:20 UTC)
+
+[Timer]
+OnCalendar=Sun *-*-* 04:20:00 UTC
+Persistent=true
+RandomizedDelaySec=15min
+Unit=hermes-history-backup.service
+
+[Install]
+WantedBy=timers.target

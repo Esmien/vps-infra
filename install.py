@@ -201,6 +201,8 @@ CORE_TIMERS = [
     "webui-compact-images.timer",
     "webui-data-backup.timer",
     "webui-generated-images-retention.timer",
+    "hermes-history-backup.timer",
+    "secrets-offsite-backup.timer",
 ]
 CORE_SERVICES = ["fw-guard-postgres.service"]
 NOTIFY_SERVICES = [
@@ -233,6 +235,8 @@ HOST_BIN_SCRIPTS = [
     "hermes-boot-notify.sh",
     "hermes-state-backup.sh",
     "hermes-state-watch.sh",
+    "hermes-history-backup.py",
+    "secrets-offsite-backup.py",
 ]
 
 BACKEND_PORTS = {"8080": "ai", "4000": "llm"}

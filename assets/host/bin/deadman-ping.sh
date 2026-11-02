@@ -12,7 +12,20 @@ fi
 if [[ -z "$URL" && -r /home/ai_service/notifications/.env ]]; then
     URL=$(grep -m1 '^DEADMAN_URL=' /home/ai_service/notifications/.env | cut -d= -f2- | tr -d '[:space:]')
 fi
-[[ -z "$URL" ]] && exit 0   # не настроено — тихо выходим, чтобы не спамить
+if [[ -z "$URL" ]]; then
+    # Не настроено — не пингуем, но и не молчим: раз в сутки строка в журнал, иначе
+    # мёртвый сторож выглядит как работающий (проверка 2026-11: так и было).
+    STATE_DIR=/var/lib/deadman-ping
+    STATE="$STATE_DIR/unconfigured.stamp"
+    mkdir -p "$STATE_DIR"
+    now=$(date -u +%s)
+    last=$(cat "$STATE" 2>/dev/null || echo 0)
+    if (( now - last >= 86400 )); then
+        echo "$now" > "$STATE"
+        echo "deadman-ping: DEADMAN_URL не задан — внешний сторож не активен (healthchecks.io, см. vps-infra/README)" >&2
+    fi
+    exit 0
+fi
 
 CONTAINERS="${DEADMAN_CONTAINERS:-litellm open-webui searxng open-terminal}"
 bad=0
