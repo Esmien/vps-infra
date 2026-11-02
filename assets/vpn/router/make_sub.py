@@ -29,7 +29,7 @@ EE = "🇪🇪 Эстония (General)"
 FR = "🇫🇷 Франция (Gemini)"
 FI = "🇫🇮 Финляндия (Gemini резерв)"
 TEST = "🛠 Тест (Develop)"
-WHITE_GROUP = "🛡 Белые списки"
+WHITE_GROUP = "🛡 Белые списки (LTE)"
 
 
 def vless(uid: str, path: str, tag: str) -> str:
@@ -124,7 +124,7 @@ def build_whitelist(token_dir: Path, uid: str) -> None:
 
     proxies = "".join(clash_proxy_from_link(w["link"], w["name"]) for w in white)
     names = "".join(f'      - {json.dumps(w["name"], ensure_ascii=False)}\n' for w in white)
-    (token_dir / "clash.yaml").write_text(f"""# Esmien VPN — белые списки
+    (token_dir / "clash.yaml").write_text(f"""# Esmien VPN (LTE) — белые списки
 # Узлы подключаются напрямую, мимо нашего сервера: работают, когда провайдер режет всё, кроме РФ-адресов
 mixed-port: 7890
 allow-lan: false

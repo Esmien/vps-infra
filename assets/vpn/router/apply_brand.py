@@ -36,9 +36,9 @@ TEMPLATE = """server {{
         try_files /$esmien_sub_token/$esmien_sub_file =404;
         default_type text/plain;
         add_header Cache-Control "no-store";
-        add_header profile-title "Esmien VPN";
+        add_header profile-title $esmien_sub_title;
         add_header profile-update-interval 12;
-        add_header Content-Disposition "inline; filename=esmien-vpn";
+        add_header Content-Disposition "inline; filename=$esmien_sub_fname";
     }}
 }}
 """
@@ -83,7 +83,27 @@ def render(port: int, host: str = HOST, cert: str = CERT) -> str:
     return TEMPLATE.format(port=port, host=host, cert=cert, logname=logname, locations=locations.rstrip("\n"))
 
 
+def write_title_map() -> None:
+    """Profile title per subscription token: whitelist bundle is the LTE one."""
+    titles = {"default": "Esmien VPN"}
+    for d in sorted(Path("/var/www/esmien-sub").iterdir()):
+        if not d.is_dir():
+            continue
+        kind_file = d / "kind"
+        kind = kind_file.read_text().strip() if kind_file.exists() else "sub"
+        titles[d.name] = "Esmien VPN (LTE)" if kind == "whitelist" else "Esmien VPN"
+    body = "map $esmien_sub_token $esmien_sub_title {\n" + "".join(
+        f'    "{t}" "{n}";\n' for t, n in titles.items()) + "}\n"
+    body += "map $esmien_sub_token $esmien_sub_fname {\n"
+    body += "".join(f'    "{t}" "{"esmien-vpn-lte" if n.endswith("(LTE)") else "esmien-vpn"}";\n'
+                    for t, n in titles.items())
+    body += "}\n"
+    Path("/etc/nginx/conf.d/00-esmien-sub-title.conf").write_text(body)
+    print("written 00-esmien-sub-title.conf:", {k: v for k, v in titles.items() if k != "default"})
+
+
 def main() -> int:
+    write_title_map()
     for port in PORTS:
         target = Path(f"/etc/nginx/conf.d/vpn-{port}.conf")
         target.write_text(render(port))
