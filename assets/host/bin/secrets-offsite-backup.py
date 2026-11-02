@@ -184,6 +184,8 @@ def main() -> int:
     monitor.record_backup_registry(
         monitor.backup_registry_entry(DB_NAME, enc_path, chat_id, sent, True)
     )
+    # Шифрованный архив ушёл, inventory тоже — открытый tar с секретами на диске не нужен.
+    tar_path.unlink(missing_ok=True)
     monitor.send_telegram(
         "🔐 <b>Секреты .env — офсайт-копия</b>\n"
         f"{enc_path.name} · {len(sources)} файлов · AES-256\n"

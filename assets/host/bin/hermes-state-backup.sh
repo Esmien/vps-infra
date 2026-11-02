@@ -139,6 +139,8 @@ HOST_BIN=(
     owui-signup-approver.py
     tor-rotate.sh
     fw-guard-postgres.sh
+    hermes-history-backup.py
+    secrets-offsite-backup.py
 )
 for f in "${HOST_BIN[@]}"; do
     [[ -f "/usr/local/bin/$f" ]] && install -m 700 -D "/usr/local/bin/$f" "$REPO_DIR/host/bin/$f"
@@ -154,6 +156,8 @@ HOST_UNITS=(
     litellm-spend-retention.service litellm-spend-retention.timer
     postgres-backup.service postgres-backup.timer postgres-backup-notify.service postgres-backup-notify.timer
     webui-data-backup.service webui-data-backup.timer
+    hermes-history-backup.service hermes-history-backup.timer
+    secrets-offsite-backup.service secrets-offsite-backup.timer
 )
 for f in "${HOST_UNITS[@]}"; do
     [[ -f "/etc/systemd/system/$f" ]] && install -m 644 -D "/etc/systemd/system/$f" "$REPO_DIR/host/systemd/$f"
