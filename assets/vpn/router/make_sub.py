@@ -20,9 +20,9 @@ PORT = _BRAND["port"]
 ROOT = Path("/var/www/esmien-sub")
 UID_FILE = Path("/root/mtproto-faketls/ws-client-uuid")
 
-EE = "🇪🇪 Esmien EE (General)"
-FR = "🇫🇷 Esmien FR (Gemini)"
-TEST = "🛠 Esmien TEST (Develop)"
+EE = "🇪🇪 Эстония (General)"
+FR = "🇫🇷 Франция (Gemini)"
+TEST = "🛠 Тест (Develop)"
 
 
 def vless(uid: str, path: str, tag: str) -> str:
