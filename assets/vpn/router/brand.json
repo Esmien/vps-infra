@@ -9,14 +9,16 @@
     "general": "/general",
     "france": "/france",
     "test": "/test",
-    "lte": "/lte"
+    "lte": "/lte",
+    "fi": "/fi"
   },
   "upstreams": {
     "/ws": 10081,
     "/general": 10082,
     "/france": 10083,
     "/test": 10084,
-    "/lte": 10085
+    "/lte": 10085,
+    "/fi": 10086
   },
   "legacy_hosts": {
     "ai.esmien.qd.je": "/etc/letsencrypt/live/ai.esmien.qd.je",
