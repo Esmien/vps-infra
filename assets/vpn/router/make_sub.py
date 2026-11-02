@@ -86,28 +86,46 @@ def clash_proxy_from_link(link: str, name: str) -> str:
     return body
 
 
+def sb_link(link: str, name: str) -> dict:
+    u = urllib.parse.urlparse(link)
+    q = dict(urllib.parse.parse_qsl(u.query))
+    net = q.get("type", "tcp")
+    out = {"type": u.scheme, "tag": name, "server": u.hostname, "server_port": u.port}
+    if u.scheme == "vless":
+        out["uuid"] = urllib.parse.unquote(u.username or "")
+    else:
+        out["password"] = urllib.parse.unquote(u.username or "")
+    if q.get("flow"):
+        out["flow"] = q["flow"]
+    if net == "grpc":
+        out["transport"] = {"type": "grpc", "service_name": q.get("serviceName", "")}
+    elif net == "ws":
+        out["transport"] = {"type": "ws", "path": q.get("path", "/"),
+                            "headers": {"Host": q.get("host", u.hostname)}}
+    if q.get("security") in ("tls", "reality"):
+        out["tls"] = {"enabled": True, "server_name": q.get("sni") or u.hostname,
+                      "utls": {"enabled": True, "fingerprint": q.get("fp", "chrome")}}
+        if q.get("security") == "reality":
+            out["tls"]["reality"] = {"enabled": True, "public_key": q.get("pbk", ""),
+                                     "short_id": q.get("sid", "")}
+    return out
+
 def load_nodes():
     relay = json.loads(RELAY_FILE.read_text()) if RELAY_FILE.exists() else []
     white = json.loads(WHITE_FILE.read_text()) if WHITE_FILE.exists() else []
     return relay, white
 
 
-def build(token_dir: Path, uid: str) -> None:
-    relay, white = load_nodes()
-    ours = [(EE, _BRAND["paths"]["general"]), (FR, _BRAND["paths"]["france"]),
-            (FI, _BRAND["paths"]["fi"]), (TEST, _BRAND["paths"]["test"])]
-    ours += [(n["name"], n["path"]) for n in relay]
-
-    links = [vless(uid, path, name) for name, path in ours] + [w["link"] for w in white]
+def build_whitelist(token_dir: Path, uid: str) -> None:
+    """Bundle with the whitelist (RU entry) nodes only — clients reach them directly."""
+    _, white = load_nodes()
+    links = [w["link"] for w in white]
     (token_dir / "list.txt").write_text(base64.b64encode(("\n".join(links) + "\n").encode()).decode() + "\n")
 
-    ours_proxies = "".join(clash_proxy(uid, name, path) for name, path in ours)
-    white_proxies = "".join(clash_proxy_from_link(w["link"], w["name"]) for w in white)
-    ours_names = "".join(f'      - {json.dumps(n, ensure_ascii=False)}\n' for n, _ in ours)
-    white_names = "".join(f'      - {json.dumps(w["name"], ensure_ascii=False)}\n' for w in white)
-
-    (token_dir / "clash.yaml").write_text(f"""# Esmien VPN
-# Маршруты через наш сервер + отдельная группа «Белые списки» (напрямую, мимо нашего сервера)
+    proxies = "".join(clash_proxy_from_link(w["link"], w["name"]) for w in white)
+    names = "".join(f'      - {json.dumps(w["name"], ensure_ascii=False)}\n' for w in white)
+    (token_dir / "clash.yaml").write_text(f"""# Esmien VPN — белые списки
+# Узлы подключаются напрямую, мимо нашего сервера: работают, когда провайдер режет всё, кроме РФ-адресов
 mixed-port: 7890
 allow-lan: false
 mode: rule
@@ -122,14 +140,63 @@ dns:
   nameserver: [1.1.1.1, 8.8.8.8]
 
 proxies:
-{ours_proxies}{white_proxies}proxy-groups:
+{proxies}proxy-groups:
+  - name: "{WHITE_GROUP}"
+    type: select
+    proxies:
+{names}
+rules:
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - MATCH,{WHITE_GROUP}
+""")
+
+    outs = [sb_link(w["link"], w["name"]) for w in white] + [{"type": "direct", "tag": "direct"}]
+    sing = {"log": {"level": "warn"},
+            "inbounds": [{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}],
+            "outbounds": outs,
+            "route": {"rules": [{"outbound": white[0]["name"] if white else "direct"}]}}
+    (token_dir / "singbox.json").write_text(json.dumps(sing, indent=2, ensure_ascii=False))
+    token_dir.chmod(0o755)
+
+
+def build(token_dir: Path, uid: str) -> None:
+    if (token_dir / "kind").exists() and (token_dir / "kind").read_text().strip() == "whitelist":
+        return build_whitelist(token_dir, uid)
+    relay, white = load_nodes()
+    ours = [(EE, _BRAND["paths"]["general"]), (FR, _BRAND["paths"]["france"]),
+            (FI, _BRAND["paths"]["fi"]), (TEST, _BRAND["paths"]["test"])]
+    ours += [(n["name"], n["path"]) for n in relay]
+
+    links = [vless(uid, path, name) for name, path in ours]
+    (token_dir / "list.txt").write_text(base64.b64encode(("\n".join(links) + "\n").encode()).decode() + "\n")
+
+    ours_proxies = "".join(clash_proxy(uid, name, path) for name, path in ours)
+    ours_names = "".join(f'      - {json.dumps(n, ensure_ascii=False)}\n' for n, _ in ours)
+
+    (token_dir / "clash.yaml").write_text(f"""# Esmien VPN
+# Маршруты через наш сервер (белые списки — отдельная подписка)
+mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: false
+
+dns:
+  enable: true
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  nameserver: [1.1.1.1, 8.8.8.8]
+
+proxies:
+{ours_proxies}proxy-groups:
   - name: "Esmien VPN"
     type: select
     proxies:
-{ours_names}  - name: "{WHITE_GROUP}"
-    type: select
-    proxies:
-{white_names}
+{ours_names}
 rules:
   - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
   - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
@@ -150,34 +217,10 @@ rules:
                 "transport": {"type": "ws", "path": path, "headers": {"Host": HOST}},
                 "tls": {"enabled": True, "server_name": HOST}}
 
-    def sb_link(link: str, name: str) -> dict:
-        u = urllib.parse.urlparse(link)
-        q = dict(urllib.parse.parse_qsl(u.query))
-        net = q.get("type", "tcp")
-        out = {"type": u.scheme, "tag": name, "server": u.hostname, "server_port": u.port}
-        if u.scheme == "vless":
-            out["uuid"] = urllib.parse.unquote(u.username or "")
-        else:
-            out["password"] = urllib.parse.unquote(u.username or "")
-        if q.get("flow"):
-            out["flow"] = q["flow"]
-        if net == "grpc":
-            out["transport"] = {"type": "grpc", "service_name": q.get("serviceName", "")}
-        elif net == "ws":
-            out["transport"] = {"type": "ws", "path": q.get("path", "/"),
-                                "headers": {"Host": q.get("host", u.hostname)}}
-        if q.get("security") in ("tls", "reality"):
-            out["tls"] = {"enabled": True, "server_name": q.get("sni") or u.hostname,
-                          "utls": {"enabled": True, "fingerprint": q.get("fp", "chrome")}}
-            if q.get("security") == "reality":
-                out["tls"]["reality"] = {"enabled": True, "public_key": q.get("pbk", ""),
-                                         "short_id": q.get("sid", "")}
-        return out
 
     sing = {"log": {"level": "warn"},
             "inbounds": [{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}],
-            "outbounds": [sb_ours(n, p) for n, p in ours] + [sb_link(w["link"], w["name"]) for w in white]
-                         + [{"type": "direct", "tag": "direct"}],
+            "outbounds": [sb_ours(n, p) for n, p in ours] + [{"type": "direct", "tag": "direct"}],
             "route": {"rules": [
                 {"domain_suffix": ["google.com", "googleapis.com", "gstatic.com",
                                    "googleusercontent.com", "withgoogle.com"], "outbound": FR},
@@ -188,6 +231,15 @@ rules:
 
 def main() -> int:
     uid = UID_FILE.read_text().strip()
+    if "--new-whitelist" in sys.argv:
+        import secrets
+        token = secrets.token_urlsafe(14).replace("-", "").replace("_", "")[:18]
+        target = ROOT / token
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "kind").write_text("whitelist\n")
+        build_whitelist(target, uid)
+        print(f"https://{HOST}:{PORT}/sub/{token}")
+        return 0
     if "--new" in sys.argv or not any(ROOT.iterdir() if ROOT.is_dir() else []):
         import secrets
         token = secrets.token_urlsafe(14).replace("-", "").replace("_", "")[:18]
