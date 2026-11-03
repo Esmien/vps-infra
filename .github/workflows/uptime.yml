@@ -43,8 +43,8 @@ jobs:
             return 1
           }
           rc=0
-          probe https://ai.esmien.qd.je/ || rc=1
-          probe https://llm.esmien.qd.je/ || rc=1
+          probe https://ai.esmien.ru/ || rc=1
+          probe https://llm.esmien.ru/health/liveliness || rc=1
           if [ -n "${{ inputs.extra_url }}" ]; then
             probe "${{ inputs.extra_url }}" || rc=1
           fi

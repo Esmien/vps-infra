@@ -6,7 +6,7 @@ output (Let's Encrypt sends one on rate limits / repeated validation failures),
 sleeps until that moment + a few seconds, and retries.  Each new retry-after
 replaces the previous one.  Gives up only after 24 hours.
 
-Usage: certbot_retry.py vpn.esmien.qd.je [--webroot /var/www/html]
+Usage: certbot_retry.py vpn.esmien.ru [--webroot /var/www/html]
 """
 import re
 import subprocess
