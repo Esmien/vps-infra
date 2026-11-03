@@ -1506,6 +1506,21 @@ class Installer:
     PGDG_KEY_URL = "https://www.postgresql.org/media/keys/ACCC4CF8.asc"
     PGDG_FPR = "ACCC4CF8"
 
+    def check_fake_dns(self) -> None:
+        """Предупредить, если DNS отдаёт fake-IP (VPN/прокси-клиент на хосте).
+
+        Адреса 198.18.0.0/15 зарезервированы под тесты: их выдают Clash,
+        sing-box, Hiddify и подобные. Через такой прокси apt получает
+        закэшированный индекс, не совпадающий по размеру с Release, и
+        репозиторий «не подписан»/«не скачался» на ровном месте.
+        """
+        res = self.run(["getent", "ahostsv4", "apt.postgresql.org"], check=False)
+        addrs = [word for word in (res.stdout or "").split() if word.count(".") == 3]
+        fake = [a for a in addrs if a.startswith("198.18.") or a.startswith("198.19.")]
+        if fake:
+            warn(f"DNS отдаёт fake-IP {fake[0]} — похоже, на хосте включён VPN/прокси")
+            warn("apt через такой прокси получает битый индекс: отключите туннель или задайте DNS 1.1.1.1 в ВМ")
+
     def install_pgdg_key(self) -> None:
         """Скачать ключ pgdg, проверить его и положить бинарным keyring'ом.
 
@@ -1585,11 +1600,12 @@ class Installer:
         "502",
     )
 
-    def _apt_update_once(self) -> subprocess.CompletedProcess:
-        return self.run(
-            ["apt-get", "update", "-qq", "-o", "Acquire::Retries=5", "-o", "Acquire::http::Timeout=30"],
-            check=False,
-        )
+    def _apt_update_once(self, no_cache: bool = False) -> subprocess.CompletedProcess:
+        cmd = ["apt-get", "update", "-qq", "-o", "Acquire::Retries=5", "-o", "Acquire::http::Timeout=30"]
+        if no_cache:
+            # обойти промежуточный кэш (VPN/прокси с fake-IP), который отдаёт старый индекс
+            cmd += ["-o", "Acquire::http::No-Cache=true", "-o", "Acquire::http::Pipeline-Depth=0"]
+        return self.run(cmd, check=False)
 
     def apt_update(self) -> None:
         """apt-get update: чинит подпись pgdg и переживает рассинхрон зеркал.
@@ -1603,7 +1619,7 @@ class Installer:
         repaired = False
         blob = ""
         for attempt in range(4):
-            res = self._apt_update_once()
+            res = self._apt_update_once(no_cache=attempt == 3)
             if res.returncode == 0:
                 if attempt:
                     ok("индексы apt обновлены после повтора")
@@ -1652,6 +1668,7 @@ class Installer:
         if need:
             info(f"ставлю PostgreSQL {PG_VERSION} из pgdg")
             self.apt_install(["curl", "ca-certificates", "gnupg", "lsb-release"])
+            self.check_fake_dns()
             self.install_pgdg_key()
             self._write_pgdg_list()
             self.apt_update()
