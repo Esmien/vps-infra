@@ -46,10 +46,10 @@ die() { printf '%sОШИБКА:%s %s\n' "$red" "$rst" "$*" >&2; exit 1; }
 
 # ── лог: и в файл, и на экран ────────────────────────────────────────────────
 mkdir -p "$(dirname "$LOG")"
-if command -v tee >/dev/null 2>&1; then
-    exec > >(tee -a "$LOG") 2>&1
-fi
-say "начало: $(date -u '+%Y-%m-%d %H:%M:%S UTC'), лог: $LOG"
+# Свой stdout не перехватываем: установщик рисует живой блок вывода и ему нужен tty.
+# В файл уходит stderr + собственный лог установщика (/var/log/vps-infra-install.log).
+: >> "$LOG"
+say "начало: $(date -u '+%Y-%m-%d %H:%M:%S UTC'), лог установщика: /var/log/vps-infra-install.log"
 
 # ── стартовые секреты ───────────────────────────────────────────────────────
 ENV_FILE="${VPS_BOOTSTRAP_ENV:-}"
@@ -136,7 +136,7 @@ export HERMES_INSTALL_ARGS="${HERMES_INSTALL_ARGS:---non-interactive}"
 
 say "запускаю установщик (${#args[@]} аргументов)"
 say "дальше без участия: можно закрывать вкладку, прогресс в $LOG"
-if python3 "$DEST/install.py" "${args[@]}"; then
+if python3 "$DEST/install.py" "${args[@]}" 2> >(tee -a "$LOG" >&2); then
     ok "готово: $(date -u '+%H:%M:%S UTC')"
 else
     die "установщик завершился с ошибкой — смотрите $LOG"

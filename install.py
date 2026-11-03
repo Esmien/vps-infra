@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import collections
 import getpass
 import hashlib
 import json
@@ -58,6 +59,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import traceback
 import urllib.error
@@ -105,20 +107,106 @@ C_DIM = "\033[2m"
 C_BOLD = "\033[1m"
 
 
+class Pane:
+    """Живой блок вывода под заголовком шага.
+
+    Заголовок шага и разделитель с таймером остаются на месте, а ниже
+    прокручивается окно последних строк (как хвост лога). При смене шага
+    окно стирается, заголовок занимает его место. Всё это только при tty:
+    в pipe/лог уходит обычный построчный вывод.
+    """
+
+    def __init__(self) -> None:
+        self.enabled = sys.stdout.isatty() and not os.environ.get("NO_PANE")
+        size = shutil.get_terminal_size((100, 40))
+        self.cols = max(40, size.columns)
+        self.height = max(6, min(18, size.lines - 14))
+        self.buf: collections.deque[str] = collections.deque(maxlen=self.height)
+        self.drawn = False
+        self.title = ""
+        self.started = 0.0
+        self._last = 0.0
+
+    @staticmethod
+    def _plain(text: str) -> str:
+        return re.sub(r"\033\[[0-9;]*[A-Za-z]", "", str(text))
+
+    def _fit(self, text: str) -> str:
+        line = self._plain(text).replace("\t", "  ").rstrip()
+        return line[: self.cols - 2]
+
+    def _divider(self) -> str:
+        elapsed = int(time.time() - self.started) if self.started else 0
+        stamp = f"{elapsed // 60}:{elapsed % 60:02d}"
+        width = max(10, self.cols - len(stamp) - 4)
+        return f"{C_DIM}{'─' * width} {stamp}{C_RESET}"
+
+    def _frame(self) -> None:
+        header = f"{C_CYAN}{C_BOLD}==> {self.title}{C_RESET}"
+        lines = list(self.buf)
+        out = ["\r\033[2K" + header + "\n", "\r\033[2K" + self._divider() + "\n"]
+        for i in range(self.height):
+            out.append("\r\033[2K" + (self._fit(lines[i]) if i < len(lines) else ""))
+            if i < self.height - 1:
+                out.append("\n")
+        sys.stdout.write("".join(out))
+        sys.stdout.flush()
+        self.drawn = True
+
+    def begin(self, title: str) -> None:
+        self.title = title
+        self.started = time.time()
+        self.buf.clear()
+        self._last = 0.0
+        if not self.enabled:
+            print(f"\n{C_CYAN}{C_BOLD}==> {title}{C_RESET}")
+            return
+        if self.drawn:
+            # встаём на строку разделителя: заголовок предыдущего шага остаётся выше
+            sys.stdout.write(f"\r\033[{self.height}A\033[J")
+        else:
+            sys.stdout.write("\n")
+        self._frame()
+
+    def push(self, text: str) -> None:
+        if not self.enabled or not self.drawn:
+            print(text)
+            return
+        for line in str(text).splitlines() or [""]:
+            self.buf.append(line)
+        sys.stdout.write(f"\r\033[{self.height + 1}A")
+        self._frame()
+
+    def finish(self) -> None:
+        if not self.enabled or not self.drawn:
+            return
+        sys.stdout.write(f"\r\033[{self.height}A\033[J")
+        sys.stdout.flush()
+        self.drawn = False
+
+
+PANE = Pane()
+
+
+def say(text: str = "") -> None:
+    """Любая информационная строка: в панель, если она активна."""
+    PANE.push(text)
+
+
 def step(title: str) -> None:
-    print(f"\n{C_CYAN}{C_BOLD}==> {title}{C_RESET}")
+    PANE.begin(title)
 
 
 def ok(msg: str) -> None:
-    print(f"  {C_GREEN}✓{C_RESET} {msg}")
+    PANE.push(f"  {C_GREEN}✓{C_RESET} {msg}")
 
 
 def info(msg: str) -> None:
-    print(f"  {C_DIM}·{C_RESET} {msg}")
+    PANE.push(f"  {C_DIM}·{C_RESET} {msg}")
 
 
 def warn(msg: str) -> None:
-    print(f"  {C_YELLOW}!{C_RESET} {msg}", file=sys.stderr)
+    PANE.push(f"  {C_YELLOW}!{C_RESET} {msg}")
 
 
 class InstallError(RuntimeError):
@@ -126,6 +214,7 @@ class InstallError(RuntimeError):
 
 
 def die(msg: str) -> None:
+    PANE.finish()
     raise InstallError(msg)
 
 
@@ -350,8 +439,38 @@ class Installer:
             full_env.update(env)
         try:
             if stream:
-                proc = subprocess.run(cmd, cwd=cwd, env=full_env, timeout=timeout)
-                res = subprocess.CompletedProcess(cmd, proc.returncode, "", "")
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=cwd,
+                    env=full_env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+                killed = {"flag": False}
+                if timeout:
+                    def _killer() -> None:
+                        killed["flag"] = True
+                        proc.kill()
+
+                    timer = threading.Timer(timeout, _killer)
+                    timer.daemon = True
+                    timer.start()
+                else:
+                    timer = None
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    plain = line.rstrip()
+                    if plain:
+                        self.log(plain)
+                        PANE.push(plain)
+                rc = proc.wait()
+                if timer:
+                    timer.cancel()
+                if killed["flag"]:
+                    die(f"команда не завершилась за {timeout}s: {printable}")
+                res = subprocess.CompletedProcess(cmd, rc, "", "")
             else:
                 res = subprocess.run(
                     cmd,
@@ -594,7 +713,7 @@ class Installer:
             store[key] = cur
             return cur
         if hint:
-            print(f"    {C_DIM}{hint}{C_RESET}")
+            say(f"    {C_DIM}{hint}{C_RESET}")
         shown = mask(cur) if secret and cur else cur
         while True:
             suffix = f" [{shown}]" if shown else ""
@@ -621,7 +740,7 @@ class Installer:
         dom = self.detect_domains()
         cfg = self.cfg
 
-        print(f"  {C_DIM}Enter — оставить значение в скобках. Секреты вводятся скрыто.{C_RESET}")
+        say(f"  {C_DIM}Enter — оставить значение в скобках. Секреты вводятся скрыто.{C_RESET}")
 
         cfg["ai_domain"] = self.prompt(
             cfg, "ai_domain", "Домен Open WebUI", default=dom.get("ai", "ai.example.com"), required=True,
@@ -666,7 +785,7 @@ class Installer:
         cfg["telegram"] = cfg.get("telegram") or {}
         tg = cfg["telegram"]
         if not self.args.yes and sys.stdin.isatty():
-            print(f"  {C_DIM}Telegram-уведомления: пустой токен — блок пропускается.{C_RESET}")
+            say(f"  {C_DIM}Telegram-уведомления: пустой токен — блок пропускается.{C_RESET}")
         tg["bot_token"] = self.prompt(
             tg, "bot_token", "Telegram BOT_TOKEN (уведомления)", default=nenv.get("BOT_TOKEN", ""), secret=True
         )
@@ -2117,7 +2236,7 @@ server {{
                 check=False,
             )
             if res.returncode != 0:
-                print(f"  {C_RED}✗{C_RESET} {name}: не найден")
+                say(f"  {C_RED}✗{C_RESET} {name}: не найден")
                 healthy = False
                 continue
             parts = (res.stdout or "").strip().split("|")
@@ -2126,12 +2245,12 @@ server {{
             restarts = parts[2] if len(parts) > 2 else "?"
             good = state == "running" and health in ("healthy", "")
             mark = f"{C_GREEN}✓{C_RESET}" if good else f"{C_RED}✗{C_RESET}"
-            print(f"  {mark} {name}: {state} {health} restarts={restarts}")
+            say(f"  {mark} {name}: {state} {health} restarts={restarts}")
             healthy = healthy and good
 
         for db in ("webui_db", "litellm_db"):
             n = self.psql_scalar("SELECT count(*) FROM pg_tables WHERE schemaname='public'", db=db)
-            print(f"  {C_DIM}·{C_RESET} {db}: {n or '?'} таблиц")
+            say(f"  {C_DIM}·{C_RESET} {db}: {n or '?'} таблиц")
 
         checks = [
             ("litellm", "http://127.0.0.1:4000/health/liveliness"),
@@ -2140,14 +2259,14 @@ server {{
         ]
         for name, url in checks:
             res = self.run(["curl", "-fsS", "-m", "8", "-o", "/dev/null", "-w", "%{http_code}", url], check=False)
-            print(f"  {C_DIM}·{C_RESET} {name}: HTTP {res.stdout.strip() or 'ERR'}")
+            say(f"  {C_DIM}·{C_RESET} {name}: HTTP {res.stdout.strip() or 'ERR'}")
         # open-terminal не публикует порт на хост — проверяем изнутри контейнера.
         res = self.run(
             ["docker", "exec", "open-terminal", "curl", "-fsS", "-m", "8", "-o", "/dev/null", "-w", "%{http_code}",
              "http://127.0.0.1:8000/health"],
             check=False,
         )
-        print(f"  {C_DIM}·{C_RESET} open-terminal (в контейнере): HTTP {res.stdout.strip() or 'ERR'}")
+        say(f"  {C_DIM}·{C_RESET} open-terminal (в контейнере): HTTP {res.stdout.strip() or 'ERR'}")
 
         if not self.args.skip_tls:
             for domain in (self.cfg.get("ai_domain"), self.cfg.get("llm_domain"), self.cfg.get("extra_domain")):
@@ -2158,16 +2277,16 @@ server {{
                     check=False,
                 )
                 code = res.stdout.strip() or "ERR"
-                print(f"  {C_DIM}·{C_RESET} https://{domain}: {code}")
+                say(f"  {C_DIM}·{C_RESET} https://{domain}: {code}")
 
         active = self.run(["systemctl", "list-timers", "--no-legend", "--plain"], check=False).stdout or ""
         marks = [u for u in CORE_TIMERS if u in active]
-        print(f"  {C_DIM}·{C_RESET} таймеров активно: {len(marks)}/{len(CORE_TIMERS)}")
+        say(f"  {C_DIM}·{C_RESET} таймеров активно: {len(marks)}/{len(CORE_TIMERS)}")
 
         f2b = self.run(["systemctl", "is-active", "fail2ban"], check=False).stdout.strip()
-        print(f"  {C_DIM}·{C_RESET} fail2ban: {f2b or 'ERR'}")
+        say(f"  {C_DIM}·{C_RESET} fail2ban: {f2b or 'ERR'}")
         limited = Path("/etc/nginx/conf.d/zz-ratelimit.conf").is_file()
-        print(f"  {C_DIM}·{C_RESET} nginx rate-limit: {'да' if limited else 'нет'}")
+        say(f"  {C_DIM}·{C_RESET} nginx rate-limit: {'да' if limited else 'нет'}")
         if f2b != "active" and not self.args.skip_tls:
             warn("fail2ban не активен — SSH без rate-limit защиты")
 
@@ -2392,6 +2511,7 @@ server {{
             except Exception as exc:  # noqa: BLE001
                 self.log(traceback.format_exc())
                 die(f"шаг «{name}» упал: {exc}")
+        PANE.finish()
         elapsed = time.time() - t0
 
         state = {
@@ -2405,7 +2525,7 @@ server {{
             STATE_DIR.mkdir(parents=True, exist_ok=True)
             (STATE_DIR / "state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n")
 
-        print()
+        say()
         if self.failed:
             warn(f"завершено за {elapsed:.0f} c, есть проблемы: {'; '.join(self.failed)}")
             return 2
@@ -2437,7 +2557,7 @@ def do_export(args: argparse.Namespace) -> int:
         if age_h > 48:
             warn(f"{db}: дампу {age_h:.0f} ч — можно обновить: systemctl start postgres-backup")
         files.append((latest, latest.name))
-        print(f"  {C_DIM}·{C_RESET} {db}: {latest.name} ({latest.stat().st_size / 1024**2:.1f} MB)")
+        say(f"  {C_DIM}·{C_RESET} {db}: {latest.name} ({latest.stat().st_size / 1024**2:.1f} MB)")
 
     with tarfile.open(out, "w:gz") as tar:
         for path, arcname in files:
@@ -2445,7 +2565,7 @@ def do_export(args: argparse.Namespace) -> int:
         if args.with_data:
             data = WEBUI_DATA
             if data.is_dir():
-                print(f"  {C_DIM}·{C_RESET} webui_data: {sum(1 for _ in data.rglob('*'))} объектов")
+                say(f"  {C_DIM}·{C_RESET} webui_data: {sum(1 for _ in data.rglob('*'))} объектов")
                 tar.add(data, arcname="webui_data")
         manifest = {
             "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -2461,7 +2581,7 @@ def do_export(args: argparse.Namespace) -> int:
 
         tar.addfile(ti, io.BytesIO(blob))
 
-    print()
+    say()
     ok(f"bundle: {out} ({out.stat().st_size / 1024**2:.1f} MB)")
     info("перенесите файл на новый сервер и запустите:")
     info(f"  install.py --bundle {out.name} --restore")
