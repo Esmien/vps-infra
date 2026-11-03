@@ -1503,6 +1503,53 @@ class Installer:
         self.cfg["dump_source"] = "telegram"
         self.save_config()
 
+    PGDG_KEY_URL = "https://www.postgresql.org/media/keys/ACCC4CF8.asc"
+    PGDG_FPR = "ACCC4CF8"
+
+    def install_pgdg_key(self) -> None:
+        """Скачать ключ pgdg, проверить его и положить бинарным keyring'ом.
+
+        Armored-файл в signed-by apt читает не всегда: если файл не разобран,
+        apt пишет NO_PUBKEY и репозиторий считается неподписанным. Поэтому
+        ключ приводим к бинарному виду и проверяем, что отпечаток совпал.
+        """
+        keyring = Path("/usr/share/keyrings/pgdg.gpg")
+        asc = Path("/usr/share/keyrings/pgdg.asc")
+        self.ensure_dir(keyring.parent, 0o755)
+        res = self.run(["curl", "-fsSL", "--retry", "3", "-o", str(asc), self.PGDG_KEY_URL], check=False)
+        if res.returncode != 0 or not asc.is_file() or asc.stat().st_size < 500:
+            die(f"не скачался ключ pgdg: {self.PGDG_KEY_URL} (rc={res.returncode})")
+        head = asc.read_text(errors="replace")[:80]
+        if "BEGIN PGP PUBLIC KEY BLOCK" not in head:
+            die("скачанный ключ pgdg не похож на PGP-блок (прокси или заглушка?)")
+        if shutil.which("gpg"):
+            res = self.run(["gpg", "--batch", "--yes", "--dearmor", "--output", str(keyring), str(asc)], check=False)
+            if res.returncode != 0:
+                die(f"gpg --dearmor не смог разобрать ключ pgdg: {(res.stderr or '').strip()[:150]}")
+        else:
+            shutil.copyfile(asc, keyring)
+        os.chmod(keyring, 0o644)
+        shown = self.run(["gpg", "--show-keys", "--with-colons", str(keyring)], check=False)
+        if self.PGDG_FPR not in (shown.stdout or ""):
+            die(f"в keyring нет ожидаемого отпечатка {self.PGDG_FPR}")
+        ok("ключ pgdg проверен и установлен")
+
+    def apt_update_with_key_retry(self) -> None:
+        """apt-get update; при NO_PUBKEY — один раз переустановить ключ и повторить."""
+        res = self.run(["apt-get", "update", "-qq"], check=False)
+        if res.returncode == 0:
+            return
+        blob = ((res.stdout or "") + (res.stderr or ""))
+        if "NO_PUBKEY" in blob or "not signed" in blob:
+            warn("apt не увидел ключ pgdg — переустанавливаю и повторяю")
+            self.install_pgdg_key()
+            res = self.run(["apt-get", "update", "-qq"], check=False)
+            if res.returncode == 0:
+                return
+            blob = ((res.stdout or "") + (res.stderr or ""))
+        self.log(blob[-800:])
+        die(f"apt-get update не прошёл: {blob.strip().splitlines()[-1][:160] if blob.strip() else 'rc=' + str(res.returncode)}")
+
     def step_postgres(self) -> None:
         step(f"PostgreSQL {PG_VERSION} + pgvector")
         cluster = Path(f"/etc/postgresql/{PG_VERSION}/main")
@@ -1518,19 +1565,14 @@ class Installer:
         if need:
             info(f"ставлю PostgreSQL {PG_VERSION} из pgdg")
             self.apt_install(["curl", "ca-certificates", "gnupg", "lsb-release"])
-            self.ensure_dir(Path("/usr/share/postgresql-common/pgdg"), 0o755)
-            self.run([
-                "curl", "-fsSL", "-o",
-                "/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc",
-                "https://www.postgresql.org/media/keys/ACCC4CF8.asc",
-            ])
-            self.run(["chmod", "0644", "/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc"])
+            self.install_pgdg_key()
             codename = self.run(["lsb_release", "-cs"]).stdout.strip()
-            Path("/etc/apt/sources.list.d/pgdg.list").write_text(
-                "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] "
-                f"https://apt.postgresql.org/pub/repos/apt {codename}-pgdg main\n"
-            ) if not self.dry else None
-            self.run(["apt-get", "update", "-qq"])
+            if not self.dry:
+                Path("/etc/apt/sources.list.d/pgdg.list").write_text(
+                    "deb [signed-by=/usr/share/keyrings/pgdg.gpg] "
+                    f"https://apt.postgresql.org/pub/repos/apt {codename}-pgdg main\n"
+                )
+            self.apt_update_with_key_retry()
             self.apt_install([
                 f"postgresql-{PG_VERSION}",
                 f"postgresql-client-{PG_VERSION}",
