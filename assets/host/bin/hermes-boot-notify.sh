@@ -5,6 +5,8 @@ set -u
 
 export HERMES_HOME=/root/.hermes
 HERMES=/root/.hermes/hermes-agent/.hermes/bin/hermes
+[ -x "$HERMES" ] || HERMES=$(command -v hermes || true)
+[ -n "$HERMES" ] || HERMES=/usr/local/bin/hermes
 LOG=/var/log/hermes-boot-notify.log
 EXPECTED=/etc/hermes-boot-expected-containers.txt
 
