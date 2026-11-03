@@ -1580,11 +1580,13 @@ class Installer:
         return "noble"
 
     def _write_pgdg_list(self) -> None:
+        # http, а не https: проверку подписи делает GPG, а Fastly-кэш https
+        # у части провайдеров отдаёт устаревший InRelease и валит apt.
         codename = self._codename()
         if not self.dry:
             self.PGDG_LIST.write_text(
                 "deb [signed-by=/usr/share/keyrings/pgdg.gpg] "
-                f"https://apt.postgresql.org/pub/repos/apt {codename}-pgdg main\n"
+                f"http://apt.postgresql.org/pub/repos/apt {codename}-pgdg main\n"
             )
 
     APT_TRANSIENT = (
