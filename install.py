@@ -1572,39 +1572,70 @@ class Installer:
                 f"https://apt.postgresql.org/pub/repos/apt {codename}-pgdg main\n"
             )
 
+    APT_TRANSIENT = (
+        "unexpected size",
+        "mirror sync",
+        "hash sum mismatch",
+        "failed to fetch",
+        "some index files failed",
+        "temporary failure",
+        "could not connect",
+        "connection failed",
+        "503",
+        "502",
+    )
+
+    def _apt_update_once(self) -> subprocess.CompletedProcess:
+        return self.run(
+            ["apt-get", "update", "-qq", "-o", "Acquire::Retries=5", "-o", "Acquire::http::Timeout=30"],
+            check=False,
+        )
+
     def apt_update(self) -> None:
-        """apt-get update с самопочинкой репозитория pgdg.
+        """apt-get update: чинит подпись pgdg и переживает рассинхрон зеркал.
 
-        Частый случай на повторном прогоне: в sources.list.d остался старый
-        pgdg.list, ключа нет — apt валит весь update с кодом 100 и блокирует
-        любой шаг, которому нужен apt. Чиним ключ, при необходимости ставим
-        gnupg, переписываем источник и только потом сдаёмся.
+        Два known-случая, из-за которых раньше падала вся установка:
+        1) остался старый pgdg.list без ключа → apt валит update с NO_PUBKEY;
+        2) зеркало apt.postgresql.org в момент обновления отдаёт файл с другим
+           размером/хэшем («Mirror sync in progress») → apt отдаёт код 100.
+        Второе лечится паузой и повтором, а не падением установщика.
         """
-        res = self.run(["apt-get", "update", "-qq"], check=False)
-        if res.returncode == 0:
-            return
-        blob = self._apt_blob(res)
-        if "NO_PUBKEY" not in blob and "not signed" not in blob:
-            self.log(blob[-800:])
-            die(f"apt-get update не прошёл (rc={res.returncode}): {blob.splitlines()[-1][:160] if blob else ''}")
-
-        warn("apt не принимает подпись pgdg — переустанавливаю ключ")
-        if not (shutil.which("gpg") and shutil.which("curl")):
-            self._neutralize_pgdg()
-            res = self.run(["apt-get", "update", "-qq"], check=False)
-            if res.returncode != 0:
-                self.log(self._apt_blob(res)[-800:])
-                die("apt-get update не прошёл даже без pgdg")
-            self.run(["apt-get", "install", "-y", "-qq", "--no-install-recommends",
-                      "gnupg", "curl", "ca-certificates"], timeout=900)
-        self.install_pgdg_key()
-        self._write_pgdg_list()
-        res = self.run(["apt-get", "update", "-qq"], check=False)
-        if res.returncode != 0:
+        repaired = False
+        blob = ""
+        for attempt in range(4):
+            res = self._apt_update_once()
+            if res.returncode == 0:
+                if attempt:
+                    ok("индексы apt обновлены после повтора")
+                return
             blob = self._apt_blob(res)
-            self.log(blob[-800:])
-            die(f"pgdg не принимается и после переустановки ключа: {blob.splitlines()[-1][:160] if blob else ''}")
-        ok("репозиторий pgdg починен")
+            low = blob.lower()
+
+            if ("no_pubkey" in low or "not signed" in low) and not repaired:
+                repaired = True
+                warn("apt не принимает подпись pgdg — переустанавливаю ключ")
+                if not (shutil.which("gpg") and shutil.which("curl")):
+                    self._neutralize_pgdg()
+                    res = self._apt_update_once()
+                    if res.returncode != 0:
+                        self.log(self._apt_blob(res)[-800:])
+                        die("apt-get update не прошёл даже без pgdg")
+                    self.run(["apt-get", "install", "-y", "-qq", "--no-install-recommends",
+                              "gnupg", "curl", "ca-certificates"], timeout=900)
+                self.install_pgdg_key()
+                self._write_pgdg_list()
+                continue
+
+            if any(marker in low for marker in self.APT_TRANSIENT) and attempt < 3:
+                wait = (5, 15, 30)[attempt]
+                warn(f"зеркало apt отдало рассинхрон — повтор {attempt + 1}/3 через {wait} c")
+                time.sleep(wait)
+                continue
+            break
+
+        self.log(blob[-1200:])
+        tail = blob.splitlines()[-1][:180] if blob else f"rc={res.returncode}"
+        die(f"apt-get update не прошёл: {tail}")
 
     def step_postgres(self) -> None:
         step(f"PostgreSQL {PG_VERSION} + pgvector")
