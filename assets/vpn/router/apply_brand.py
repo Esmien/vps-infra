@@ -27,7 +27,7 @@ TEMPLATE = """server {{
     ssl_certificate_key {cert}/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
-    access_log /var/log/nginx/vpn-{logname}.log;
+    access_log /var/log/nginx/vpn-{logname}.log vpnx;
 
     location = / {{ default_type text/plain; return 200 "ok\\n"; }}
 {locations}

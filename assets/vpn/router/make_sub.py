@@ -29,18 +29,19 @@ EE = "🇪🇪 Эстония (General)"
 FR = "🇫🇷 Франция (Gemini)"
 FI = "🇫🇮 Финляндия (Gemini резерв)"
 TEST = "🛠 Тест (Develop)"
+IP = "141.98.166.213"  # вход по IP: работает, даже если DNS домена лежит
 WHITE_GROUP = "🛡 Белые списки (LTE)"
 
 
-def vless(uid: str, path: str, tag: str) -> str:
+def vless(uid: str, path: str, tag: str, addr: str = HOST) -> str:
     query = {"type": "ws", "security": "tls", "sni": HOST, "host": HOST, "path": path, "encryption": "none"}
-    return f"vless://{uid}@{HOST}:{PORT}?" + urllib.parse.urlencode(query) + "#" + urllib.parse.quote(tag)
+    return f"vless://{uid}@{addr}:{PORT}?" + urllib.parse.urlencode(query) + "#" + urllib.parse.quote(tag)
 
 
-def clash_proxy(uid: str, name: str, path: str) -> str:
+def clash_proxy(uid: str, name: str, path: str, addr: str = HOST) -> str:
     return f"""  - name: {json.dumps(name, ensure_ascii=False)}
     type: vless
-    server: {HOST}
+    server: {addr}
     port: {PORT}
     uuid: {uid}
     network: ws
@@ -166,15 +167,18 @@ def build(token_dir: Path, uid: str) -> None:
     if (token_dir / "kind").exists() and (token_dir / "kind").read_text().strip() == "whitelist":
         return build_whitelist(token_dir, uid)
     relay, white = load_nodes()
-    ours = [(EE, _BRAND["paths"]["general"]), (FR, _BRAND["paths"]["france"]),
-            (FI, _BRAND["paths"]["fi"]), (TEST, _BRAND["paths"]["test"])]
-    ours += [(n["name"], n["path"]) for n in relay]
+    ours = [(EE, _BRAND["paths"]["general"], HOST), (FR, _BRAND["paths"]["france"], HOST),
+            (FI, _BRAND["paths"]["fi"], HOST), (TEST, _BRAND["paths"]["test"], HOST)]
+    # дубли основных маршрутов по IP: спасают, когда DNS домена не отвечает
+    ours += [(f"{EE} по IP", _BRAND["paths"]["general"], IP),
+             (f"{FR} по IP", _BRAND["paths"]["france"], IP)]
+    ours += [(n["name"], n["path"], HOST) for n in relay]
 
-    links = [vless(uid, path, name) for name, path in ours]
+    links = [vless(uid, path, name, addr) for name, path, addr in ours]
     (token_dir / "list.txt").write_text(base64.b64encode(("\n".join(links) + "\n").encode()).decode() + "\n")
 
-    ours_proxies = "".join(clash_proxy(uid, name, path) for name, path in ours)
-    ours_names = "".join(f'      - {json.dumps(n, ensure_ascii=False)}\n' for n, _ in ours)
+    ours_proxies = "".join(clash_proxy(uid, name, path, addr) for name, path, addr in ours)
+    ours_names = "".join(f'      - {json.dumps(n, ensure_ascii=False)}\n' for n, _, _ in ours)
 
     (token_dir / "clash.yaml").write_text(f"""# Esmien VPN
 # Маршруты через наш сервер (белые списки — отдельная подписка)
@@ -212,15 +216,15 @@ rules:
   - MATCH,{EE}
 """)
 
-    def sb_ours(name: str, path: str) -> dict:
-        return {"type": "vless", "tag": name, "server": HOST, "server_port": PORT, "uuid": uid,
+    def sb_ours(name: str, path: str, addr: str = HOST) -> dict:
+        return {"type": "vless", "tag": name, "server": addr, "server_port": PORT, "uuid": uid,
                 "transport": {"type": "ws", "path": path, "headers": {"Host": HOST}},
                 "tls": {"enabled": True, "server_name": HOST}}
 
 
     sing = {"log": {"level": "warn"},
             "inbounds": [{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080}],
-            "outbounds": [sb_ours(n, p) for n, p in ours] + [{"type": "direct", "tag": "direct"}],
+            "outbounds": [sb_ours(n, p, a) for n, p, a in ours] + [{"type": "direct", "tag": "direct"}],
             "route": {"rules": [
                 {"domain_suffix": ["google.com", "googleapis.com", "gstatic.com",
                                    "googleusercontent.com", "withgoogle.com"], "outbound": FR},

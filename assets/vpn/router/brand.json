@@ -1,7 +1,7 @@
 {
   "brand": "Esmien VPN",
-  "host": "vpn.esmien.qd.je",
-  "cert_dir": "/etc/letsencrypt/live/vpn.esmien.qd.je",
+  "host": "vpn.esmien.ru",
+  "cert_dir": "/etc/letsencrypt/live/vpn.esmien.ru",
   "port": 8443,
   "alt_port": 2087,
   "paths": {
@@ -58,6 +58,7 @@
   },
   "legacy_hosts": {
     "ai.esmien.qd.je": "/etc/letsencrypt/live/ai.esmien.qd.je",
-    "mon.esmien.qd.je": "/etc/letsencrypt/live/mon.esmien.qd.je"
+    "mon.esmien.qd.je": "/etc/letsencrypt/live/mon.esmien.qd.je",
+    "vpn.esmien.qd.je": "/etc/letsencrypt/live/vpn.esmien.qd.je"
   }
 }
