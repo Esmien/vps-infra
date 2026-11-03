@@ -511,9 +511,19 @@ class Installer:
             timeout=1800,
         )
 
+    def pg_bin(self, name: str) -> str:
+        """Путь к настоящему бинарю PostgreSQL.
+
+        /usr/bin/psql — это perl-обёртка pg_wrapper; в части окружений
+        (в т.ч. на минимальных ВМ) запуск через sudo -u postgres падает с
+        «Permission denied». Ходим прямо в /usr/lib/postgresql/<ver>/bin.
+        """
+        direct = Path(f"/usr/lib/postgresql/{PG_VERSION}/bin/{name}")
+        return str(direct) if direct.is_file() else name
+
     def psql(self, sql: str, db: str = "postgres", check: bool = True) -> subprocess.CompletedProcess:
         return self.run(
-            ["sudo", "-u", "postgres", "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-d", db],
+            ["sudo", "-u", "postgres", self.pg_bin("psql"), "-X", "-q", "-v", "ON_ERROR_STOP=1", "-d", db],
             input_text=sql,
             check=check,
         )
@@ -1745,7 +1755,9 @@ class Installer:
             return
         last = ""
         for _ in range(60):
-            res = self.run(["sudo", "-u", "postgres", "psql", "-tAc", "SELECT 1"], check=False, quiet=True)
+            res = self.run(
+                ["sudo", "-u", "postgres", self.pg_bin("psql"), "-tAc", "SELECT 1"], check=False, quiet=True
+            )
             if res.returncode == 0:
                 return
             last = ((res.stderr or "") + (res.stdout or "")).strip().splitlines()
