@@ -45,6 +45,25 @@ RUN sed -i \
  && grep -q "rebranded: Esmien AI" /app/backend/open_webui/env.py \
  && rm -f /app/backend/open_webui/__pycache__/env.cpython-*.pyc
 
+# 1b) Cache-busting иконок: iOS кэширует apple-touch-icon по URL намертво,
+#     чистка данных Safari его не сбрасывает. Новые имена файлов = новые URL.
+RUN sed -i \
+        -e "s|/static/apple-touch-icon.png|/static/apple-touch-icon-v2.png|g" \
+        -e "s|rel=\"icon\" type=\"image/png\" href=\"/static/favicon.png\"|rel=\"icon\" type=\"image/png\" href=\"/static/favicon-v2.png\"|g" \
+        /app/build/index.html \
+ && sed -i "s|/static/logo.png|/static/logo-v2.png|g" /app/backend/open_webui/main.py \
+ && grep -q "apple-touch-icon-v2.png" /app/build/index.html \
+ && grep -q "logo-v2.png" /app/backend/open_webui/main.py \
+ && rm -f /app/backend/open_webui/__pycache__/main.cpython-*.pyc
+
+# 1c) Лендинг v0.13.0+: бейдж над заголовком захардкожен в бандле ("Open WebUI"),
+#     WEBUI_NAME на него не влияет — правим строку в собранном чанке.
+RUN for f in /app/build/_app/immutable/nodes/*.js; do \
+        sed -i "s|>Open WebUI</div>|>Esmien AI</div>|g" "$f"; \
+    done \
+ && ! grep -rq ">Open WebUI</div>" /app/build/_app/immutable/nodes/ \
+ && echo "landing badge rebranded"
+
 # 2) Ассеты в источник статики. Здесь и favicon/logo (цветной вариант),
 #    и splash.png (светлая тема), и splash-dark.png (тёмная тема).
 COPY --from=assets /branding/out/ /app/build/static/

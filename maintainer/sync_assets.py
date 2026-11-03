@@ -26,9 +26,9 @@ HOST_UNITS = Path("/etc/systemd/system")
 HOST_OTC = Path("/root/open-terminal-config")
 
 STACK_EXCLUDE_DIRS = {"_state_snapshot", "out", "__pycache__", ".git"}
-STACK_EXCLUDE_FILES = {".env"}
+STACK_EXCLUDE_FILES = {".env"}  # плюс любые .env.* кроме .env.example — см. is_secret_file
 NOTIF_EXCLUDE_DIRS = {"__pycache__", ".git"}
-NOTIF_EXCLUDE_FILES = {".env", ".gitignore"}
+NOTIF_EXCLUDE_FILES = {".env", ".gitignore"}  # плюс .env.*
 NOTIF_EXCLUDE_GLOBS = ("test_*.py", "*.bak*")
 
 
@@ -51,6 +51,12 @@ def copy_if_changed(src: Path, dst: Path) -> bool:
     return True
 
 
+
+def is_secret_file(name: str) -> bool:
+    """Любой .env и его бэкапы (.env.bak-*, .env.save) — секрет; .env.example — нет."""
+    return name.startswith(".env") and not name.endswith(".example")
+
+
 def sync_tree(src: Path, dst: Path, exclude_dirs: set, exclude_files: set, globs: tuple = ()) -> int:
     if not src.is_dir():
         return 0
@@ -59,7 +65,7 @@ def sync_tree(src: Path, dst: Path, exclude_dirs: set, exclude_files: set, globs
         rel = item.relative_to(src)
         if any(part in exclude_dirs for part in rel.parts):
             continue
-        if item.name in exclude_files:
+        if item.name in exclude_files or is_secret_file(item.name):
             continue
         if any(item.match(g) for g in globs):
             continue

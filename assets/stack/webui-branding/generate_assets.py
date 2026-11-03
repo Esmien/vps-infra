@@ -2,7 +2,7 @@
 """Генерация всех брендинг-ассетов Open WebUI из двух исходников.
 
 Вход (оба — PNG с прозрачным фоном, квадратные, желательно >= 768px):
-    logo_light.png — цветной кристалл  -> светлая тема, favicon, PWA
+    logo_dark.png  — монохромный хром, с контурной обводкой -> все ассеты (обе темы)
     logo_dark.png  — монохромный хром  -> тёмная тема (splash-dark)
 
 Выход: out/<ассеты, которые Open WebUI ищет в /static>
@@ -24,10 +24,10 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 OUT = Path("out")
-LIGHT_SRC = Path("logo_light.png")
+LIGHT_SRC = Path("logo_dark.png")  # 03.11.2026: тёмный кристалл используется везде (по указанию владельца)
 DARK_SRC = Path("logo_dark.png")
 
 # Размеры повторяют стоковые ассеты Open WebUI (сверено с v0.12.3).
@@ -38,7 +38,7 @@ ASSETS: dict[str, tuple[str, int, float]] = {
     "favicon-96x96.png": ("light", 96, 0.04),
     "favicon.ico": ("light", 32, 0.04),
     "apple-touch-icon.png": ("light", 180, 0.10),
-    "logo.png": ("light", 500, 0.06),
+    "logo.png": ("light", 500, 0.12),  # 12%: logo.png уходит в manifest как maskable, круглый кроп ОС срезал бы вершины
     "web-app-manifest-192x192.png": ("light", 192, 0.12),
     "web-app-manifest-512x512.png": ("light", 512, 0.12),
     "splash.png": ("light", 500, 0.08),
@@ -65,6 +65,19 @@ def fit_square(img: Image.Image, size: int, padding: float) -> Image.Image:
     return canvas.resize((size, size), Image.LANCZOS)
 
 
+def add_outline(img: Image.Image, rim_ratio: float = 0.025, color=(221, 225, 231, 255)) -> Image.Image:
+    """Светлая обводка по силуэту — чтобы тёмный кристалл читался на чёрном фоне.
+
+    Rim задаётся долей от размера ассета, а не от исходника: иначе на 32px
+    фавиконе обводка вырождается в ноль и марка снова пропадает в тёмной теме.
+    """
+    rim = max(1, round(max(img.size) * rim_ratio))
+    grown = img.getchannel("A").filter(ImageFilter.MaxFilter(rim * 2 + 1))
+    halo = Image.new("RGBA", img.size, color)
+    halo.putalpha(grown)
+    return Image.alpha_composite(halo, img)
+
+
 def main() -> None:
     for p in (LIGHT_SRC, DARK_SRC):
         if not p.exists():
@@ -74,7 +87,7 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
 
     for name, (variant, size, padding) in ASSETS.items():
-        out = fit_square(sources[variant], size, padding)
+        out = add_outline(fit_square(sources[variant], size, padding))
         if name.endswith(".ico"):
             out.save(OUT / name, sizes=[(16, 16), (32, 32), (48, 48)])
         else:
@@ -90,6 +103,13 @@ def main() -> None:
         f'<image width="512" height="512" xlink:href="data:image/png;base64,{png_b64}"/>'
         "</svg>"
     )
+
+    # Cache-busting для iOS: Safari запоминает apple-touch-icon по URL и не
+    # сбрасывает его даже при очистке данных сайта. Новое имя = новый запрос.
+    for src, dst in (("apple-touch-icon.png", "apple-touch-icon-v2.png"),
+                     ("favicon.png", "favicon-v2.png"),
+                     ("logo.png", "logo-v2.png")):
+        (OUT / dst).write_bytes((OUT / src).read_bytes())
 
     print("Сгенерировано:", ", ".join(sorted(p.name for p in OUT.iterdir())))
 
