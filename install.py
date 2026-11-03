@@ -869,6 +869,15 @@ class Installer:
         ]:
             self.ensure_dir(path, mode, AI_USER if path != Path("/root/open-terminal-config") else None)
 
+        # .env, распакованные из архива до создания пользователя.
+        for target, inside_root in getattr(self, "secret_paths", []):
+            if self.dry or not target.is_file():
+                continue
+            try:
+                shutil.chown(target, "root", "root" if inside_root else AI_USER)
+            except (KeyError, LookupError, PermissionError) as exc:
+                warn(f"{target}: не удалось выставить владельца ({exc})")
+
         # Каталоги юнитов, которые пишут от root.
         for path in ("/var/lib/docker-autorecover", "/var/lib/server-monitor"):
             if not self.dry:
@@ -1036,19 +1045,20 @@ class Installer:
         self.run(["tar", "-xzf", str(tar_path), "-C", str(root)], timeout=120)
 
         placed: list[str] = []
+        self.secret_paths: list[tuple[Path, bool]] = []
         for rel in names:
             target = root / rel.lstrip("./")
             if not target.is_file():
                 continue
             placed.append(str(target))
             if target.name.startswith(".env"):
-                if str(target).startswith(str(root / "root")):
-                    os.chmod(target, 0o600)
-                else:
-                    os.chmod(target, 0o640)
+                inside_root = str(target).startswith(str(root / "root"))
+                os.chmod(target, 0o600 if inside_root else 0o640)
+                self.secret_paths.append((target, inside_root))
                 try:
-                    shutil.chown(target, "root", AI_USER)
-                except (KeyError, PermissionError):
+                    shutil.chown(target, "root", "root" if inside_root else AI_USER)
+                except (KeyError, LookupError, PermissionError):
+                    # пользователя ai_service ещё нет — дожмём после шага users
                     pass
         if not placed:
             die("в архиве не нашлось файлов .env")
