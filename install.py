@@ -530,8 +530,11 @@ class Installer:
             check=check,
         )
 
-    def psql_scalar(self, sql: str, db: str = "postgres") -> str:
-        res = self.run(["sudo", "-u", "postgres", self.pg_bin("psql"), "-X", "-tA", "-v", "ON_ERROR_STOP=1", "-d", db, "-c", sql])
+    def psql_scalar(self, sql: str, db: str = "postgres", check: bool = True) -> str:
+        res = self.run(
+            ["sudo", "-u", "postgres", self.pg_bin("psql"), "-X", "-tA", "-v", "ON_ERROR_STOP=1", "-d", db, "-c", sql],
+            check=check,
+        )
         return (res.stdout or "").strip()
 
     def compose(self, *args: str, **kw) -> subprocess.CompletedProcess:
@@ -1922,6 +1925,9 @@ $$;
         # «залежавшийся файл»: проверку свежести к нему не применяем.
         from_bot = self.dump_from_bot
         dbs = [("litellm_db", "litellm"), ("webui_db", "webui")]
+        # Схема после миграций уже создана, поэтому «есть таблицы» ≠ «есть данные»:
+        # пустую базу с мигрированной схемой нужно восстанавливать, иначе дамп молча пропускается.
+        probes = {"litellm_db": '"LiteLLM_VerificationToken"', "webui_db": '"user"'}
         todo = []
         for db, owner in dbs:
             tables = self.psql_scalar("SELECT count(*) FROM pg_tables WHERE schemaname='public'", db=db)
@@ -1933,9 +1939,15 @@ $$;
             if age_h > STALE_HOURS and not self.args.force_stale and not bundle and not from_bot:
                 warn(f"{db}: дамп {dump.name} старше {STALE_HOURS} ч ({age_h:.0f} ч) — пропускаю (--force-stale чтобы применить)")
                 continue
-            if tables not in ("0", "") and not restore_all:
-                info(f"{db}: в базе уже {tables} таблиц — восстановление пропущено (--restore чтобы перезаписать)")
+            rows = (self.psql_scalar(f"SELECT count(*) FROM {probes[db]}", db=db, check=False)
+                    if tables not in ("0", "") else "0")
+            has_data = rows not in ("0", "", None)
+            if has_data and not restore_all:
+                info(f"{db}: в базе уже {tables} таблиц и {rows} строк данных — восстановление пропущено "
+                     f"(--restore чтобы перезаписать)")
                 continue
+            if tables not in ("0", "") and not has_data:
+                info(f"{db}: схема создана миграциями, данных нет — восстанавливаю дамп")
             todo.append((db, owner, dump))
 
         if not todo:
