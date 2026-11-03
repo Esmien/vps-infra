@@ -28,6 +28,12 @@ vps-infra — установщик всей инфраструктуры VPS.
   --bundle PATH|URL       архив с дампами БД (и данными WebUI)
   --from-bot              взять последний бэкап БД из Telegram-бота (спросит токен)
   --tg-registry PATH|URL  реестр file_id (по умолчанию — приватный hermes-state)
+  --secrets-from-bot      взять архив .env из файл-бота (набор secrets_offsite)
+  --secrets-archive PATH  локальный .enc архив секретов вместо скачивания
+  --secrets-key PATH      пароль архива (по умолчанию /root/.secrets/offsite.key)
+  --bot-token STR         переопределить BOT_TOKEN (тестовый бот для прогона)
+  --file-bot-token STR    переопределить FILE_BOT_TOKEN
+  --set KEY=VALUE         переопределить значение .env (можно несколько раз)
   --restore               восстановить БД даже поверх существующих данных
   --skip-tls              не трогать nginx/certbot
   --hermes / --no-hermes  установить/не устанавливать Hermes
@@ -507,11 +513,17 @@ class Installer:
             fallback = parse_env(DEFAULT_INFRA_DIR / "ai" / ".env")
             if fallback.get("GITHUB_KEY"):
                 self.env["GITHUB_KEY"] = fallback["GITHUB_KEY"]
+            elif os.environ.get("GITHUB_KEY"):
+                self.env["GITHUB_KEY"] = os.environ["GITHUB_KEY"]
         # Маска из install.json не должна возвращаться в .env: токен живёт только в .env.
         tg = self.cfg.get("telegram") or {}
         for key in ("bot_token", "file_bot_token"):
             if tg.get(key) == MASKED_TOKEN:
                 tg[key] = ""
+        for item in getattr(self.args, "set", []) or []:
+            key, _, value = str(item).partition("=")
+            if key:
+                self.env[key.strip()] = value
 
     def save_config(self) -> None:
         if self.dry or self.check_mode:
@@ -633,6 +645,16 @@ class Installer:
         self.prompt(
             self.env, "OPENROUTER_API_KEY", "Ключ OpenRouter (можно пусто)", default=self.env.get("OPENROUTER_API_KEY", ""),
             secret=True, hint="openrouter.ai → Keys. Пусто — только модели с собственными ключами.",
+        )
+        self.prompt(
+            self.env, "ENABLE_DIRECT_INTEGRATIONS", "Прямые интеграции WebUI (true/false)",
+            default=self.env.get("ENABLE_DIRECT_INTEGRATIONS", "true"),
+            hint="Песочница и терминал в WebUI требуют true.",
+        )
+        self.prompt(
+            self.env, "OPEN_TERMINAL_SANDBOX_API_KEY", "Ключ API песочницы терминала",
+            default=self.env.get("OPEN_TERMINAL_SANDBOX_API_KEY") or secrets.token_urlsafe(24), secret=True,
+            hint="Пусто — сгенерировать новый.",
         )
 
         # Telegram — необязательный блок.
@@ -873,6 +895,11 @@ class Installer:
 
     def step_secrets(self) -> None:
         step("Секреты и .env")
+        tg_override = self.cfg.setdefault("telegram", {})
+        if self.args.bot_token:
+            tg_override["bot_token"] = self.args.bot_token
+        if self.args.file_bot_token:
+            tg_override["file_bot_token"] = self.args.file_bot_token
         tmpl = (TEMPLATES / "ai.env.tmpl").read_text()
         content = tmpl
         for key, val in self.env.items():
@@ -910,6 +937,120 @@ class Installer:
                 ok("notifications/.env без изменений")
         else:
             warn("Telegram-токен не задан — мониторинг и алерты будут пропущены")
+
+    # ── секреты из зашифрованного архива ────────────────────────────────────
+
+    SECRETS_KEY_DEFAULT = Path("/root/.secrets/offsite.key")
+    SECRETS_ITER = 300000
+
+    def secret_set(self, registry: dict) -> dict | None:
+        """Последний набор secrets_offsite в реестре file_id."""
+        sets = [
+            item
+            for item in registry.get("sets", [])
+            if isinstance(item, dict) and item.get("db") == "secrets_offsite" and item.get("parts")
+        ]
+        if not sets:
+            return None
+        return sorted(sets, key=lambda s: str(s.get("created_at") or ""))[-1]
+
+    def secrets_blob(self) -> tuple[bytes, str]:
+        """Зашифрованный архив: из файла или из файл-бота."""
+        if self.args.secrets_archive:
+            path = Path(self.args.secrets_archive).expanduser()
+            if not path.is_file():
+                die(f"архив не найден: {path}")
+            return path.read_bytes(), path.name
+
+        token = self.args.tg_token or parse_env(NOTIF_DIR / ".env").get("FILE_BOT_TOKEN") or ""
+        if not token:
+            die("нужен токен файл-бота: --tg-token или FILE_BOT_TOKEN в notifications/.env")
+        registry = self.load_tg_registry() or {}
+        if not registry:
+            die("реестр file_id недоступен — укажите --tg-registry")
+        entry = self.secret_set(registry)
+        if not entry:
+            die("в реестре нет набора secrets_offsite")
+        parts = sorted(entry.get("parts") or [], key=lambda part: str(part.get("name")))
+        info(f"архив секретов: {entry.get('dump') or '?'} ({len(parts)} частей)")
+        blob = b"".join(self.tg_download(token, part) for part in parts)
+        want = str(entry.get("sha256") or "")[:32]
+        if want and hashlib.sha256(blob).hexdigest()[:32] != want:
+            die("sha256 архива не совпал с реестром")
+        return blob, str(entry.get("dump") or "secrets.enc")
+
+    def override_hermes_token(self) -> None:
+        """Подменить TELEGRAM_BOT_TOKEN в /root/.hermes/.env (прогон на тестовом боте)."""
+        path = Path(os.environ.get("VPS_INFRA_HERMES_ENV", "/root/.hermes/.env"))
+        if not path.is_file():
+            die(f"нет {path} — переопределять токен некуда")
+        token = str(self.args.hermes_token)
+        lines = path.read_text().splitlines()
+        out, seen = [], False
+        for line in lines:
+            if line.startswith("TELEGRAM_BOT_TOKEN="):
+                out.append(f"TELEGRAM_BOT_TOKEN={token}")
+                seen = True
+            else:
+                out.append(line)
+        if not seen:
+            out.append(f"TELEGRAM_BOT_TOKEN={token}")
+        os.chmod(path, 0o600)
+        path.write_text("\n".join(out) + "\n")
+        ok("токен Hermes переопределён (тестовый бот)")
+
+    def restore_secrets(self) -> None:
+        """Расшифровать архив и разложить .env по своим местам (0640 root:ai_service)."""
+        step("Секреты из архива")
+        key = Path(self.args.secrets_key or self.SECRETS_KEY_DEFAULT).expanduser()
+        if not key.is_file():
+            die(f"нет файла с паролем: {key} (--secrets-key)")
+        blob, name = self.secrets_blob()
+        if self.dry:
+            info(f"[dry-run] расшифровал бы {name} паролем {key} и разложил .env по путям")
+            return
+        work = Path(tempfile.mkdtemp(prefix="secrets-"))
+        enc = work / "secrets.enc"
+        enc.write_bytes(blob)
+        tar_path = work / "secrets.tar.gz"
+        res = subprocess.run(
+            [
+                "openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2",
+                "-iter", str(self.SECRETS_ITER), "-pass", f"file:{key}",
+                "-in", str(enc), "-out", str(tar_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0:
+            die(f"не расшифровалось (не тот пароль?): {(res.stderr or '').strip()[:200]}")
+        listing = subprocess.run(["tar", "-tzf", str(tar_path)], capture_output=True, text=True)
+        if listing.returncode != 0:
+            die("расшифрованный файл не является tar.gz")
+        names = [line for line in (listing.stdout or "").splitlines() if line.strip()]
+        root = Path(os.environ.get("VPS_INFRA_SECRETS_ROOT", "/"))
+        self.run(["tar", "-xzf", str(tar_path), "-C", str(root)], timeout=120)
+
+        placed: list[str] = []
+        for rel in names:
+            target = root / rel.lstrip("./")
+            if not target.is_file():
+                continue
+            placed.append(str(target))
+            if target.name.startswith(".env"):
+                if str(target).startswith(str(root / "root")):
+                    os.chmod(target, 0o600)
+                else:
+                    os.chmod(target, 0o640)
+                try:
+                    shutil.chown(target, "root", AI_USER)
+                except (KeyError, PermissionError):
+                    pass
+        if not placed:
+            die("в архиве не нашлось файлов .env")
+        ok(f"разложено файлов: {len(placed)}")
+        for path in placed:
+            info(f"· {path}")
 
     def fetch_bundle(self) -> Path | None:
         src = self.args.bundle
@@ -2217,6 +2358,11 @@ server {{
     def execute(self) -> int:
         self.open_log()
         self.load_config()
+        if self.args.secrets_from_bot or self.args.secrets_archive:
+            self.restore_secrets()
+            self.load_config()
+        if getattr(self.args, "hermes_token", None) and not self.dry:
+            self.override_hermes_token()
         steps = self.selected_steps()
         t0 = time.time()
         for name, title in steps:
@@ -2332,6 +2478,29 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from-bot", action="store_true", help="взять последний бэкап БД из Telegram-бота")
     p.add_argument("--tg-token", help="токен файл-бота для --from-bot (иначе спросит / возьмёт из .env)")
     p.add_argument("--tg-registry", help="реестр file_id (путь или URL; по умолчанию — приватный hermes-state)")
+    p.add_argument(
+        "--secrets-from-bot",
+        action="store_true",
+        help="скачать зашифрованный архив .env из файл-бота (набор secrets_offsite) и разложить по путям",
+    )
+    p.add_argument(
+        "--secrets-archive",
+        help="локальный .enc архив секретов вместо скачивания из бота",
+    )
+    p.add_argument(
+        "--secrets-key",
+        help="файл с паролем архива секретов (по умолчанию /root/.secrets/offsite.key)",
+    )
+    p.add_argument("--bot-token", help="переопределить BOT_TOKEN (например, тестовый бот для прогона)")
+    p.add_argument("--file-bot-token", help="переопределить FILE_BOT_TOKEN")
+    p.add_argument("--hermes-token", help="переопределить TELEGRAM_BOT_TOKEN Hermes (тестовый бот)")
+    p.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="переопределить значение .env (можно несколько раз)",
+    )
     p.add_argument("--restore", action="store_true", help="восстановить БД поверх существующих данных")
     p.add_argument("--force-stale", action="store_true", help=f"применять дампы старше {STALE_HOURS} ч")
     p.add_argument("--skip-restore", action="store_true", help="не трогать базы")
