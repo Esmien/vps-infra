@@ -2623,12 +2623,64 @@ server {{
         names = [line.strip() for line in (res.stdout or "").splitlines() if line.strip()]
         return [n for n in names if not n.startswith("_")]
 
+    def ensure_hermes_shim(self) -> None:
+        """Сделать hermes доступным как команда: установщик кладёт бинарь
+        в ~/.local/bin или ~/.hermes/..., а PATH у root их не содержит."""
+        found = shutil.which("hermes")
+        if found:
+            ok(f"hermes уже в PATH: {found}")
+            return
+        candidates = [
+            Path("/root/.local/bin/hermes"),
+            Path("/root/.hermes/hermes-agent/.hermes/bin/hermes"),
+            Path("/root/.hermes/hermes-agent/hermes"),
+        ]
+        src = next((c for c in candidates if c.is_file()), None)
+        if src is None:
+            warn("после установки не нашёл бинарь hermes — смотрите вывод установщика")
+            return
+        try:
+            os.chmod(src, 0o755)
+        except OSError:
+            pass
+        target = Path("/usr/local/bin/hermes")
+        if target.is_symlink() and Path(os.readlink(target)) == src:
+            ok(f"hermes уже слинкован: {target}")
+            return
+        if target.exists() or target.is_symlink():
+            warn(f"{target} занят — не трогаю, добавьте {src.parent} в PATH")
+            return
+        target.symlink_to(src)
+        ok(f"hermes доступен как {target}")
+
+    def ensure_hermes_gateway(self) -> None:
+        """Гейтвей: user-юнит, если он есть, иначе — обычным процессом."""
+        unit = "hermes-" + "gateway.service"
+        units = self.run(["bash", "-c", f"systemctl --user list-unit-files {unit}"], check=False, quiet=True)
+        if unit in (units.stdout or ""):
+            self.run(["bash", "-c", f"XDG_RUNTIME_DIR=/run/user/0 systemctl --user restart {unit}"], check=False)
+            ok("гейтвей Hermes перезапущен через systemd")
+            return
+        running = self.run(["bash", "-c", "pgrep -f 'hermes gateway run'"], check=False, quiet=True)
+        if (running.stdout or "").strip():
+            ok("гейтвей Hermes уже работает")
+            return
+        self.run(["bash", "-c", "nohup /usr/local/bin/hermes gateway run >>/var/log/hermes-gateway.log 2>&1 &"],
+                 check=False)
+        ok("гейтвей Hermes запущен процессом (юнита нет)")
+
     def step_hermes(self) -> None:
         step("Hermes")
         if self.args.hermes is False:
             info("--no-hermes: пропускаю")
             return
-        installed = shutil.which("hermes") is not None
+        installed = shutil.which("hermes") is not None or any(
+            c.is_file() for c in (
+                Path("/root/.local/bin/hermes"),
+                Path("/root/.hermes/hermes-agent/.hermes/bin/hermes"),
+                Path("/root/.hermes/hermes-agent/hermes"),
+            )
+        )
         if self.args.hermes is None:
             # Всегда спрашиваем, даже в автоматическом режиме: вопрос идёт
             # через /dev/tty, потому что stdin занят потоком `curl … | bash`.
@@ -2655,6 +2707,7 @@ server {{
                 return
             ok("Hermes установлен")
 
+        self.ensure_hermes_shim()
         if self.hermes_restore:
             self.restore_hermes_state()
 
@@ -2790,11 +2843,8 @@ server {{
         self.run(["systemctl", "daemon-reload"], check=False)
         self.run(["systemctl", "enable", "--now", "hermes-state-watch.service"], check=False)
         self.run(["loginctl", "enable-linger", "root"], check=False)
-        self.run(
-            ["bash", "-c", "XDG_RUNTIME_DIR=/run/user/0 systemctl --user restart hermes-gateway.service"],
-            check=False,
-        )
-        ok("hermes-state-watch включён, гейтвей перезапущен")
+        self.ensure_hermes_gateway()
+        ok("hermes-state-watch включён")
 
     # ── запуск ──────────────────────────────────────────────────────────────
 
