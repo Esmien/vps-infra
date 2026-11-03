@@ -2893,9 +2893,9 @@ WantedBy=timers.target
                 Path("/root/.hermes/hermes-agent/hermes"),
             )
         )
-        if self.args.hermes is None:
-            # Всегда спрашиваем, даже в автоматическом режиме: вопрос идёт
-            # через /dev/tty, потому что stdin занят потоком `curl … | bash`.
+        if not getattr(self.args, "no_ask_hermes", False):
+            # Спрашиваем ВСЕГДА, даже когда шаг включён флагом --hermes и режим
+            # автоматический: вопрос идёт через /dev/tty (stdin занят `curl … | bash`).
             if not self.ask("Установить Hermes (агент + харнесс) на этот сервер?", default="y"):
                 info("пропущено — поставить позже: python3 install.py --only hermes --hermes")
                 pending = Path("/root/.hermes-skip")
@@ -3245,6 +3245,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="через сколько после развёртывания Hermes проверит сервер (systemd-формат, default 15min)")
     p.add_argument("--no-postcheck", dest="no_postcheck", action="store_true",
                    help="не ставить таймер пост-проверки")
+    p.add_argument("--no-ask-hermes", dest="no_ask_hermes", action="store_true",
+                   help="не спрашивать про Hermes, действовать по флагам (для автоматизации)")
     p.add_argument("--skip", help="пропустить шаги (через запятую)")
     p.add_argument("--bundle", help="архив с дампами БД (путь или URL)")
     p.add_argument("--from-bot", action="store_true", help="взять последний бэкап БД из Telegram-бота")
