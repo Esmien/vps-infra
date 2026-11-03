@@ -108,14 +108,11 @@ def main() -> int:
         target = Path(f"/etc/nginx/conf.d/vpn-{port}.conf")
         target.write_text(render(port))
         print(f"written {target} (server_name {HOST}, cert {CERT})")
-    legacy = CONF.get("legacy_hosts", {})
-    compat = [render(port, host, cert) for host, cert in legacy.items() for port in PORTS]
+    # Хосты *.esmien.qd.je снесены 03.11.2026: домен мёртв, compat-блок не нужен.
     compat_path = Path("/etc/nginx/conf.d/vpn-compat.conf")
-    if compat:
-        compat_path.write_text("\n".join(compat))
-        print(f"written {compat_path} (legacy hosts: {', '.join(legacy)})")
-    elif compat_path.exists():
+    if compat_path.exists():
         compat_path.unlink()
+        print(f"removed {compat_path}")
     subprocess.run(["python3", str(BASE / "make_sub.py")], check=False)
     print("done: nginx -t && systemctl reload nginx")
     return 0

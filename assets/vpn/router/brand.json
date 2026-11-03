@@ -55,10 +55,5 @@
     "/p21": 10121,
     "/p22": 10122,
     "/p23": 10123
-  },
-  "legacy_hosts": {
-    "ai.esmien.qd.je": "/etc/letsencrypt/live/ai.esmien.qd.je",
-    "mon.esmien.qd.je": "/etc/letsencrypt/live/mon.esmien.qd.je",
-    "vpn.esmien.qd.je": "/etc/letsencrypt/live/vpn.esmien.qd.je"
   }
 }
