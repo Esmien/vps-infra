@@ -1602,6 +1602,18 @@ class Installer:
         "502",
     )
 
+    def _purge_pgdg_lists(self) -> int:
+        """Снести кэш индексов pgdg: старый InRelease в /var/lib/apt/lists
+        держит ожидаемый размер файла, и apt вечно ругается на unexpected size."""
+        removed = 0
+        for path in Path("/var/lib/apt/lists").glob("*pgdg*"):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+        return removed
+
     def _apt_update_once(self, no_cache: bool = False) -> subprocess.CompletedProcess:
         cmd = ["apt-get", "update", "-qq", "-o", "Acquire::Retries=5", "-o", "Acquire::http::Timeout=30"]
         if no_cache:
@@ -1619,6 +1631,7 @@ class Installer:
         Второе лечится паузой и повтором, а не падением установщика.
         """
         repaired = False
+        purged = False
         blob = ""
         for attempt in range(4):
             res = self._apt_update_once(no_cache=attempt == 3)
@@ -1642,6 +1655,12 @@ class Installer:
                               "gnupg", "curl", "ca-certificates"], timeout=900)
                 self.install_pgdg_key()
                 self._write_pgdg_list()
+                continue
+
+            if "unexpected size" in low and not purged:
+                purged = True
+                gone = self._purge_pgdg_lists()
+                warn(f"старый индекс в кэше apt — чищу ({gone} файл.) и качаю заново")
                 continue
 
             if any(marker in low for marker in self.APT_TRANSIENT) and attempt < 3:
