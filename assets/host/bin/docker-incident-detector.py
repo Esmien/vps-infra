@@ -148,7 +148,9 @@ def inspect(name: str) -> dict | None:
     }
 
 
-def exited_seconds(finished: str) -> float:
+def exited_seconds(finished: str | None) -> float:
+    if not finished:
+        return 0.0
     try:
         ts = finished.replace("Z", "+00:00")
         if "." in ts:
@@ -181,7 +183,7 @@ def collect(name: str, info: dict, reason: str) -> Path:
 
     incident = {
         "container": name, "reason": reason, "detected_at_utc": stamp,
-        "facts": info, "exited_for_s": round(exited_seconds(info["finished"]), 1),
+        "facts": info, "exited_for_s": round(exited_seconds(info.get("finished")), 1),
     }
     (d / "incident.json").write_text(json.dumps(incident, ensure_ascii=False, indent=2))
 
@@ -289,7 +291,7 @@ def main() -> int:
 
         reason = ""
         if info["status"] in ("exited", "dead") and info["policy"] in ("always", "unless-stopped"):
-            if exited_seconds(info["finished"]) >= EXITED_GRACE_S:
+            if exited_seconds(info.get("finished")) >= EXITED_GRACE_S:
                 rec["exited_hits"] = rec.get("exited_hits", 0) + 1
                 if rec["exited_hits"] >= 2:
                     reason = "exited"
