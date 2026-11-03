@@ -529,7 +529,7 @@ class Installer:
         )
 
     def psql_scalar(self, sql: str, db: str = "postgres") -> str:
-        res = self.run(["sudo", "-u", "postgres", "psql", "-X", "-tA", "-d", db, "-c", sql])
+        res = self.run(["sudo", "-u", "postgres", self.pg_bin("psql"), "-X", "-tA", "-v", "ON_ERROR_STOP=1", "-d", db, "-c", sql])
         return (res.stdout or "").strip()
 
     def compose(self, *args: str, **kw) -> subprocess.CompletedProcess:
@@ -1849,7 +1849,7 @@ class Installer:
         return targets
 
     def ensure_roles_and_databases(self) -> None:
-        step("Роли и базы данных")
+        """Роли webui/litellm и их базы + pgvector. Идемпотентно."""
         roles = {
             "webui": self.env["WEBUI_DB_PASSWORD"],
             "litellm": self.env["LITELLM_DB_PASSWORD"],
@@ -1880,7 +1880,10 @@ $$;
         ok("расширение vector включено")
 
     def step_migrate(self) -> None:
-        step("Миграции LiteLLM")
+        step("Роли, базы и миграции LiteLLM")
+        # Базы и роли создаём до старта LiteLLM: иначе контейнер подключается
+        # к несуществующей базе, а проверка схемы падает с FATAL.
+        self.ensure_roles_and_databases()
         self.compose("up", "-d", "litellm-redis", "litellm", stream=True, timeout=1200)
         if self.dry:
             return
