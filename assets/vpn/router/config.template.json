@@ -253,11 +253,14 @@
    {
     "type": "field",
     "domain": [
+     "domain:google.com",
+     "domain:googleapis.com",
+     "domain:gstatic.com",
+     "domain:googleusercontent.com",
+     "domain:google.dev",
+     "domain:withgoogle.com",
      "domain:gemini.google.com",
-     "domain:bard.google.com",
-     "domain:aistudio.google.com",
-     "domain:generativelanguage.googleapis.com",
-     "domain:ai.google.dev"
+     "domain:bard.google.com"
     ],
     "outboundTag": "fr"
    },
@@ -300,14 +303,14 @@
     "type": "field",
     "outboundTag": "fr",
     "domain": [
-     "geosite:google",
-     "domain:gemini.google.com",
-     "domain:bard.google.com",
-     "domain:generativelanguage.googleapis.com",
+     "domain:google.com",
+     "domain:googleapis.com",
      "domain:gstatic.com",
      "domain:googleusercontent.com",
-     "domain:accounts.google.com",
-     "domain:googleapis.com"
+     "domain:google.dev",
+     "domain:withgoogle.com",
+     "domain:gemini.google.com",
+     "domain:bard.google.com"
     ]
    },
    {
