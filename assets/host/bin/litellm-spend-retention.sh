@@ -23,6 +23,11 @@ if [ "$rc" -ne 0 ]; then
     exit 1
 fi
 
+# Неаутентифицированный мусор: сканеры долбят /v1/models без ключа, LiteLLM пишет
+# каждый отказ как строку с пустой моделью. Реальных расходов там нет.
+anon=$(sudo -u postgres psql -d "$PG_DB" -Atc \
+    "with d as (delete from \"LiteLLM_SpendLogs\" where coalesce(model,'')='' and \"startTime\" < now() - interval '1 day' returning 1) select count(*) from d")
+
 sudo -u postgres psql -d "$PG_DB" -q -c "vacuum (analyze) \"LiteLLM_SpendLogs\"" >>"$LOG" 2>&1
 
 stats=$(sudo -u postgres psql -d "$PG_DB" -Atc \
@@ -41,4 +46,4 @@ fi
 size=$(sudo -u postgres psql -d "$PG_DB" -Atc \
     "select pg_size_pretty(pg_total_relation_size('\"LiteLLM_SpendLogs\"')::bigint)")
 
-log "deleted=$deleted rows (retention ${RETENTION_DAYS}d), vacuum_full=$full, table now $size"
+log "deleted=$deleted rows (retention ${RETENTION_DAYS}d), anon=$anon, vacuum_full=$full, table now $size"
