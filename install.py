@@ -277,6 +277,7 @@ STEPS: list[tuple[str, str]] = [
     ("hardening", "fail2ban и anti-flood"),
     ("tls", "Nginx + сертификаты"),
     ("verify", "Проверка результата"),
+    ("health", "Проверка доступности сервисов"),
     ("hermes", "Hermes"),
 ]
 STEP_NAMES = [s[0] for s in STEPS]
@@ -2516,6 +2517,112 @@ server {{
         else:
             warn("есть проблемы — см. docker compose logs")
 
+    def ask(self, question: str, default: str = "n") -> bool:
+        """Спросить через /dev/tty: stdin занят потоком `curl … | bash`."""
+        mark = "[Y/n]" if default == "y" else "[y/N]"
+        yes = ("y", "yes", "д", "да")
+        try:
+            # /dev/tty нельзя открыть как r+ (не seekable) — открываем две стороны
+            with open("/dev/tty", "w", encoding="utf-8", errors="replace") as out, \
+                 open("/dev/tty", "r", encoding="utf-8", errors="replace") as inp:
+                PANE.finish()
+                out.write(f"\n  {C_BOLD}{question}{C_RESET} {C_DIM}{mark}{C_RESET}: ")
+                out.flush()
+                answer = inp.readline().strip().lower()
+        except OSError:
+            return default == "y"
+        if not answer:
+            return default == "y"
+        return answer in yes
+
+    HEALTH_TARGETS = (
+        ("litellm", "http://127.0.0.1:4000/health/liveliness", True),
+        ("open-webui", "http://127.0.0.1:8080/health", True),
+        ("searxng", "http://127.0.0.1:8081/", False),
+    )
+
+    def step_health(self) -> None:
+        """Живы ли сервисы: контейнеры, HTTP, Postgres, Redis. До установки Hermes."""
+        step("Проверка доступности сервисов")
+        if self.dry:
+            info("[dry-run] проверил бы контейнеры, HTTP, Postgres и Redis")
+            return
+
+        critical_failed: list[str] = []
+        warnings: list[str] = []
+
+        services = sorted({svc for svc in self.compose_build_targets().values()} |
+                          set(self.service_names()))
+        for svc in services:
+            res = self.run(
+                ["docker", "inspect", svc, "--format",
+                 "{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.RestartCount}}"],
+                check=False, quiet=True,
+            )
+            if res.returncode != 0:
+                warn(f"{svc}: контейнера нет")
+                warnings.append(f"{svc}: нет контейнера")
+                continue
+            parts = (res.stdout or "").strip().split("|")
+            state = parts[0] if parts else "?"
+            health = parts[1] if len(parts) > 1 else ""
+            restarts = parts[2] if len(parts) > 2 else "?"
+            good = state == "running" and health in ("healthy", "")
+            if good:
+                ok(f"{svc}: {state} {health} restarts={restarts}".replace("  ", " "))
+            else:
+                warn(f"{svc}: {state} {health} restarts={restarts}")
+                if svc in ("open-webui", "litellm", "litellm-redis"):
+                    critical_failed.append(svc)
+
+        for name, url, required in self.HEALTH_TARGETS:
+            res = self.run(
+                ["curl", "-fsS", "-m", "10", "-o", "/dev/null", "-w", "%{http_code}", url],
+                check=False, quiet=True,
+            )
+            code = (res.stdout or "").strip()
+            if code.startswith("2") or code.startswith("3"):
+                ok(f"{name}: HTTP {code}")
+            else:
+                warn(f"{name}: HTTP {code or 'нет ответа'}")
+                if required:
+                    critical_failed.append(name)
+
+        for db in ("webui_db", "litellm_db"):
+            n = self.psql_scalar("SELECT count(*) FROM pg_tables WHERE schemaname='public'", db=db)
+            if n.isdigit():
+                ok(f"{db}: {n} таблиц")
+            else:
+                warn(f"{db}: недоступна")
+                critical_failed.append(db)
+
+        # пароль лежит в env самого контейнера — не тащим его через командную строку
+        redis = self.run(
+            ["docker", "exec", "litellm-redis", "sh", "-c",
+             'redis-cli -a "$LITELLM_REDIS_PASSWORD" --no-auth-warning ping'],
+            check=False, quiet=True,
+        )
+        if "PONG" in (redis.stdout or ""):
+            ok("redis: PONG")
+        else:
+            warn("redis: не отвечает")
+            critical_failed.append("redis")
+
+        if self.args.skip_tls:
+            info("TLS пропущен — домены не проверяю")
+
+        if critical_failed:
+            die("сервисы не отвечают: " + ", ".join(sorted(set(critical_failed)))
+                + " — смотрите docker compose logs")
+        ok("все сервисы отвечают")
+        if warnings:
+            self.failed.append("часть сервисов без контейнера: " + ", ".join(warnings))
+
+    def service_names(self) -> list[str]:
+        res = self.compose("config", "--services", quiet=True)
+        names = [line.strip() for line in (res.stdout or "").splitlines() if line.strip()]
+        return [n for n in names if not n.startswith("_")]
+
     def step_hermes(self) -> None:
         step("Hermes")
         if self.args.hermes is False:
@@ -2523,15 +2630,13 @@ server {{
             return
         installed = shutil.which("hermes") is not None
         if self.args.hermes is None:
-            if self.args.yes or not sys.stdin.isatty():
-                info("Hermes не ставится без подтверждения (--hermes)")
-                return
-            answer = input(
-                f"\n  {C_BOLD}Установить Hermes в хостовом режиме?{C_RESET} "
-                f"{C_DIM}[y/N]{C_RESET}: "
-            ).strip().lower()
-            if answer not in ("y", "yes", "д", "да"):
+            # Всегда спрашиваем, даже в автоматическом режиме: вопрос идёт
+            # через /dev/tty, потому что stdin занят потоком `curl … | bash`.
+            if not self.ask("Установить Hermes (агент + харнесс) на этот сервер?", default="y"):
                 info("пропущено — поставить позже: python3 install.py --only hermes --hermes")
+                pending = Path("/root/.hermes-skip")
+                if not self.dry:
+                    pending.write_text("hermes не установлен при развёртывании\n")
                 return
         if installed:
             ok(f"Hermes уже установлен: {shutil.which('hermes')}")
