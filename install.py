@@ -515,6 +515,10 @@ class Installer:
                 self.env["GITHUB_KEY"] = fallback["GITHUB_KEY"]
             elif os.environ.get("GITHUB_KEY"):
                 self.env["GITHUB_KEY"] = os.environ["GITHUB_KEY"]
+            elif os.environ.get("GITHUB_TOKEN"):
+                # bootstrap.sh отдаёт токен как GITHUB_TOKEN — тем же ключом
+                # установщик ходит в приватный hermes-state за реестром file_id.
+                self.env["GITHUB_KEY"] = os.environ["GITHUB_TOKEN"]
         # Маска из install.json не должна возвращаться в .env: токен живёт только в .env.
         tg = self.cfg.get("telegram") or {}
         for key in ("bot_token", "file_bot_token"):
