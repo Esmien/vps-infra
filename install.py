@@ -998,6 +998,9 @@ class Installer:
                 self.run(["usermod", "-aG", "docker", AI_USER], check=False)
 
         for path, mode in [
+            # Сам /home/ai_service: если его создал mkdir -p, владельцем остаётся root,
+            # и ai_service не может прочитать свои же скрипты (systemd 203/EXEC).
+            (AI_HOME, 0o755),
             (self.infra_dir, 0o755),
             (self.compose_dir, 0o755),
             (self.infra_dir / "backups", 0o755),
