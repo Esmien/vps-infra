@@ -1740,13 +1740,24 @@ class Installer:
             ok("конфигурация PostgreSQL уже корректна")
 
     def wait_for_pg(self) -> None:
-        for _ in range(30):
-            if self.dry:
+        """Дождаться готовности PostgreSQL и внятно объяснить, если не поднялся."""
+        if self.dry:
+            return
+        last = ""
+        for _ in range(60):
+            res = self.run(["sudo", "-u", "postgres", "psql", "-tAc", "SELECT 1"], check=False, quiet=True)
+            if res.returncode == 0:
                 return
-            if self.run(["sudo", "-u", "postgres", "psql", "-tAc", "SELECT 1"], check=False, quiet=True).returncode == 0:
-                return
+            last = ((res.stderr or "") + (res.stdout or "")).strip().splitlines()
+            last = last[-1][:200] if last else f"rc={res.returncode}"
             time.sleep(1)
-        die("PostgreSQL не отвечает 30 секунд")
+        st = self.run(["systemctl", "status", "postgresql", "--no-pager", "-l"], check=False, quiet=True)
+        clusters = self.run(["pg_lsclusters"], check=False, quiet=True)
+        journal = self.run(["journalctl", "-u", "postgresql", "-n", "20", "--no-pager"], check=False, quiet=True)
+        for blob in (clusters.stdout, st.stdout, journal.stdout):
+            if blob:
+                self.log(blob[:2000])
+        die(f"PostgreSQL не отвечает 60 c: {last}")
 
     def step_network(self) -> None:
         step(f"Docker-сеть {DOCKER_NET}")
