@@ -2188,7 +2188,11 @@ server {{
             if self.dry:
                 info(f"[dry-run] curl -fsSL {HERMES_INSTALL_URL} | bash")
                 return
-            proc = subprocess.run(["bash", "-c", f"curl -fsSL {HERMES_INSTALL_URL} | bash"])
+            extra = os.environ.get("HERMES_INSTALL_ARGS")
+            if extra is None:
+                extra = "" if sys.stdin.isatty() else "--non-interactive"
+            tail = f" -s -- {extra}" if extra.strip() else ""
+            proc = subprocess.run(["bash", "-c", f"curl -fsSL {HERMES_INSTALL_URL} | bash{tail}"])
             if proc.returncode != 0:
                 warn("установщик Hermes завершился с ошибкой — инфраструктура при этом готова")
                 return

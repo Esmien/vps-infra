@@ -1,36 +1,80 @@
 #!/usr/bin/env bash
 #
-# bootstrap.sh — точка входа для `curl … | bash`.
+# bootstrap.sh — одна команда для полного развёртывания.
 #
-#   curl -fsSL https://raw.githubusercontent.com/Esmien/vps-infra/main/bootstrap.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/Esmien/vps-bootstrap/main/bootstrap.sh | sudo bash
 #
-# Скрипт ставит git/curl/python3, забирает репозиторий в /opt/vps-infra
-# и передаёт управление install.py (интерактивно). Аргументы пробрасываются:
+# Перед запуском положить файл со стартовыми секретами (по умолчанию
+# /root/bootstrap.env, иначе /tmp/bootstrap.env или ./bootstrap.env):
 #
-#   … | sudo bash -s -- --yes
-#   … | sudo bash -s -- --bundle https://…/bundle.tar.gz --restore
+#   GITHUB_TOKEN=ghp_...            # клон приватного репозитория + доступ к hermes-state
+#   SECRETS_KEY=<пароль архива .env>
+#   TG_FILE_TOKEN=123456:AA...      # РЕАЛЬНЫЙ файл-бот: из него тянутся секреты и дампы
+#   BOT_TOKEN=...                   # (необязательно) свой бот уведомлений
+#   FILE_BOT_TOKEN=...              # (необязательно) свой файл-бот для этого сервера
+#   HERMES_BOT_TOKEN=...            # (необязательно) свой бот Hermes
+#   WEBUI_URL=http://127.0.0.1:8080 # (необязательно)
+#
+# Всё остальное скрипт делает сам: ставит зависимости, клонирует репозиторий,
+# восстанавливает секреты из зашифрованного архива, поднимает стек, данные,
+# мониторинг, таймеры и Hermes с харнессом. TLS пропускается по умолчанию —
+# на чистой машине без домена он всё равно не выпустится.
 #
 # Переменные окружения:
-#   VPS_INFRA_REPO   URL репозитория (default: github.com/Esmien/vps-infra)
-#   VPS_INFRA_BRANCH ветка (default: main)
-#   VPS_INFRA_DIR    каталог установки (default: /opt/vps-infra)
+#   VPS_BOOTSTRAP_ENV   путь к файлу стартовых секретов
+#   VPS_INFRA_REPO      репозиторий (default: github.com/Esmien/vps-infra)
+#   VPS_INFRA_BRANCH    ветка (default: main)
+#   VPS_INFRA_DIR       каталог установки (default: /opt/vps-infra)
+#   SECRETS_KEY_PATH    куда положить пароль архива (default: /root/.secrets/offsite.key)
+#   WITH_TLS=1          не пропускать шаг nginx/certbot
+#   BOOTSTRAP_DRY=1     только план (--dry-run)
 
 set -Eeuo pipefail
 
 REPO_URL="${VPS_INFRA_REPO:-https://github.com/Esmien/vps-infra.git}"
 BRANCH="${VPS_INFRA_BRANCH:-main}"
 DEST="${VPS_INFRA_DIR:-/opt/vps-infra}"
+KEY_PATH="${SECRETS_KEY_PATH:-/root/.secrets/offsite.key}"
+LOG=/var/log/vps-bootstrap.log
 
 red=$'\033[1;31m'; grn=$'\033[1;32m'; cyn=$'\033[1;36m'; rst=$'\033[0m'
 say() { printf '%s==>%s %s\n' "$cyn" "$rst" "$*"; }
+ok()  { printf '%s ✓%s %s\n' "$grn" "$rst" "$*"; }
 die() { printf '%sОШИБКА:%s %s\n' "$red" "$rst" "$*" >&2; exit 1; }
 
 [[ "$(id -u)" -eq 0 ]] || die "нужен root: curl … | sudo bash"
 
+# ── лог: и в файл, и на экран ────────────────────────────────────────────────
+mkdir -p "$(dirname "$LOG")"
+if command -v tee >/dev/null 2>&1; then
+    exec > >(tee -a "$LOG") 2>&1
+fi
+say "начало: $(date -u '+%Y-%m-%d %H:%M:%S UTC'), лог: $LOG"
+
+# ── стартовые секреты ───────────────────────────────────────────────────────
+ENV_FILE="${VPS_BOOTSTRAP_ENV:-}"
+if [[ -z "$ENV_FILE" ]]; then
+    for cand in /root/bootstrap.env /tmp/bootstrap.env /home/*/bootstrap.env ./bootstrap.env; do
+        [[ -f "$cand" ]] && { ENV_FILE="$cand"; break; }
+    done
+fi
+[[ -n "$ENV_FILE" && -f "$ENV_FILE" ]] || die "не найден файл стартовых секретов (VPS_BOOTSTRAP_ENV или /root/bootstrap.env)"
+say "стартовые секреты: $ENV_FILE"
+set -a
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+set +a
+chmod 600 "$ENV_FILE" 2>/dev/null || true
+
+for need in GITHUB_TOKEN SECRETS_KEY TG_FILE_TOKEN; do
+    [[ -n "${!need:-}" ]] || die "в $ENV_FILE не задан $need"
+done
+
 export DEBIAN_FRONTEND=noninteractive
 
+# ── зависимости ─────────────────────────────────────────────────────────────
 missing=()
-for bin in git curl python3; do
+for bin in git curl python3 tar openssl; do
     command -v "$bin" >/dev/null 2>&1 || missing+=("$bin")
 done
 if (( ${#missing[@]} )); then
@@ -40,37 +84,59 @@ if (( ${#missing[@]} )); then
     for b in "${missing[@]}"; do
         case "$b" in
             python3) pkgs+=(python3 python3-venv) ;;
+            git)     pkgs+=(git) ;;
             *)       pkgs+=("$b") ;;
         esac
     done
     apt-get install -y -qq --no-install-recommends ca-certificates "${pkgs[@]}"
 fi
+ok "зависимости на месте"
 
+# ── репозиторий (приватный: клон по токену) ─────────────────────────────────
+AUTH_URL="https://x-access-token:${GITHUB_TOKEN}@${REPO_URL#https://}"
 if [[ -d "$DEST/.git" ]]; then
     say "обновляю $DEST"
-    git -C "$DEST" remote set-url origin "$REPO_URL"
-    git -C "$DEST" fetch --depth=1 origin "$BRANCH"
+    git -C "$DEST" remote set-url origin "$AUTH_URL"
+    git -C "$DEST" fetch --depth=1 origin "$BRANCH" --quiet
     git -C "$DEST" reset --hard FETCH_HEAD --quiet
     git -C "$DEST" clean -fdq -e '*.env' -e 'bundle*'
 else
-    say "клонирую $REPO_URL → $DEST"
+    say "клонирую репозиторий → $DEST"
     mkdir -p "$(dirname "$DEST")"
-    git clone --depth=1 --branch "$BRANCH" "$REPO_URL" "$DEST" \
-        || die "не удалось склонировать $REPO_URL (репозиторий приватный? задайте VPS_INFRA_REPO)"
+    git clone --depth=1 --branch "$BRANCH" "$AUTH_URL" "$DEST" --quiet \
+        || die "не удалось склонировать (проверьте GITHUB_TOKEN и доступ к репозиторию)"
 fi
-
+# токен не должен остаться в .git/config
+git -C "$DEST" remote set-url origin "$REPO_URL"
 cd "$DEST"
 [[ -f install.py ]] || die "в репозитории нет install.py"
+ok "репозиторий готов: $(git -C "$DEST" rev-parse --short HEAD)"
 
-# stdin — это труба curl. Возвращаем терминал, иначе вопросы установщика
-# упрутся в EOF. Это последняя команда bash, дальше управление у Python.
-if [[ ! -t 0 ]]; then
-    if ( exec 3</dev/tty ) 2>/dev/null; then
-        exec </dev/tty
-    else
-        printf '%s!%s нет терминала — вопросы установщика недоступны (нужен интерактивный запуск)\n' "$red" "$rst" >&2
-    fi
+# ── пароль архива секретов ──────────────────────────────────────────────────
+install -d -m 700 "$(dirname "$KEY_PATH")"
+umask 077
+printf '%s\n' "$SECRETS_KEY" > "$KEY_PATH"
+chmod 600 "$KEY_PATH"
+ok "пароль архива записан: $KEY_PATH"
+
+# ── аргументы установщика ───────────────────────────────────────────────────
+args=(--yes --secrets-from-bot --secrets-key "$KEY_PATH"
+      --tg-token "$TG_FILE_TOKEN" --from-bot
+      --hermes --restore-hermes)
+[[ "${WITH_TLS:-0}" == "1" ]] || args+=(--skip-tls)
+[[ -n "${BOT_TOKEN:-}" ]]      && args+=(--bot-token "$BOT_TOKEN")
+[[ -n "${FILE_BOT_TOKEN:-}" ]] && args+=(--file-bot-token "$FILE_BOT_TOKEN")
+[[ -n "${HERMES_BOT_TOKEN:-}" ]] && args+=(--hermes-token "$HERMES_BOT_TOKEN")
+[[ -n "${WEBUI_URL:-}" ]]      && args+=(--set "WEBUI_URL=$WEBUI_URL")
+[[ -n "${EXTRA_ARGS:-}" ]]     && read -r -a extra <<< "$EXTRA_ARGS" && args+=("${extra[@]}")
+[[ "${BOOTSTRAP_DRY:-0}" == "1" ]] && args+=(--dry-run)
+
+export HERMES_INSTALL_ARGS="${HERMES_INSTALL_ARGS:---non-interactive}"
+
+say "запускаю установщик (${#args[@]} аргументов)"
+say "дальше без участия: можно закрывать вкладку, прогресс в $LOG"
+if python3 "$DEST/install.py" "${args[@]}"; then
+    ok "готово: $(date -u '+%H:%M:%S UTC')"
+else
+    die "установщик завершился с ошибкой — смотрите $LOG"
 fi
-
-say "запускаю установщик"
-exec python3 "$DEST/install.py" "$@"
