@@ -66,9 +66,25 @@ set -a
 set +a
 chmod 600 "$ENV_FILE" 2>/dev/null || true
 
-for need in GITHUB_TOKEN SECRETS_KEY TG_FILE_TOKEN; do
-    [[ -n "${!need:-}" ]] || die "в $ENV_FILE не задан $need"
-done
+# GITHUB_TOKEN и GITHUB_KEY — одно и то же, принимаем любой из вариантов
+if [[ -z "${GITHUB_TOKEN:-}" && -n "${GITHUB_KEY:-}" ]]; then
+    GITHUB_TOKEN="$GITHUB_KEY"
+    export GITHUB_TOKEN
+fi
+
+missing_vars=()
+[[ -n "${GITHUB_TOKEN:-}" ]]    || missing_vars+=("GITHUB_TOKEN (или GITHUB_KEY)")
+[[ -n "${SECRETS_KEY:-}" ]]     || missing_vars+=("SECRETS_KEY")
+[[ -n "${TG_FILE_TOKEN:-}" ]]   || missing_vars+=("TG_FILE_TOKEN")
+if (( ${#missing_vars[@]} )); then
+    printf '\n  в %s нет переменных:\n' "$ENV_FILE" >&2
+    for v in "${missing_vars[@]}"; do printf '    - %s\n' "$v" >&2; done
+    printf '\n  в файле сейчас: %s\n' "$(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$ENV_FILE" | tr -d '=' | paste -sd' ' -)" >&2
+    printf '  формат: KEY=VALUE, без кавычек, по одной на строку\n\n' >&2
+    die "стартовые секреты заполнены не полностью"
+fi
+
+[[ -z "${TG_FILE_TOKEN:-}" && -n "${FILE_BOT_TOKEN:-}" ]] && TG_FILE_TOKEN="$FILE_BOT_TOKEN" && export TG_FILE_TOKEN
 
 export DEBIAN_FRONTEND=noninteractive
 
