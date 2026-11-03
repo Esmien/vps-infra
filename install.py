@@ -2726,8 +2726,20 @@ WantedBy=timers.target
         for raw in sorted({h.strip() for h in hooks if "agent-hooks" in h}):
             path = Path(os.path.expanduser(raw))
             if not path.is_file():
-                # fail_closed-хук без файла парализует агента: комментируем ссылку,
-                # оригинал конфига сохраняем рядом.
+                # Сначала пробуем восстановить сам хук из шаблона в скиллах: гейт
+                # ограничивает конкретных пользователей, и молча его отключать нельзя.
+                template = next(
+                    (q for q in Path("/root/.hermes/skills").rglob(f"templates/{path.name}") if q.is_file()),
+                    None,
+                )
+                if template is not None:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(template, path)
+                    os.chmod(path, 0o755)
+                    warn(f"хук {path.name} восстановлен из шаблона — проверьте RESTRICTED_USERS (сейчас там заглушка)")
+                    continue
+                # Файла и шаблона нет: fail_closed-хук парализует агента, поэтому
+                # комментируем ссылку, а оригинал конфига сохраняем рядом.
                 backup = cache.with_suffix(".yaml.bak-hooks")
                 if not backup.exists():
                     shutil.copyfile(cache, backup)
