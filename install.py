@@ -863,7 +863,14 @@ class Installer:
                 self.changed.append(f"secret {key}")
 
         self.env["ENABLE_ADMIN_CHAT_ACCESS"] = self.env.get("ENABLE_ADMIN_CHAT_ACCESS", "false")
-        self.env["WEBUI_URL"] = f"https://{cfg['ai_domain']}"
+        if getattr(self.args, "skip_tls", False):
+            # Без TLS домена нет: ссылки должны вести на живой адрес машины.
+            host = ""
+            res = self.run(["bash", "-c", "hostname -I 2>/dev/null | awk '{print $1}'"], check=False, quiet=True)
+            host = (res.stdout or "").strip().split()[0] if (res.stdout or "").strip() else ""
+            self.env["WEBUI_URL"] = f"http://{host}:8080" if host else "http://127.0.0.1:8080"
+        else:
+            self.env["WEBUI_URL"] = f"https://{cfg['ai_domain']}"
 
         self.save_config()
         domains = ", ".join(d for d in (cfg["ai_domain"], cfg["llm_domain"], cfg.get("extra_domain")) if d)
@@ -2704,6 +2711,82 @@ WantedBy=timers.target
         names = [line.strip() for line in (res.stdout or "").splitlines() if line.strip()]
         return [n for n in names if not n.startswith("_")]
 
+    def check_agent_hooks(self, config_path: Path | None = None) -> None:
+        """Проверить хуки Hermes: битый хук с fail_closed блокирует все инструменты.
+
+        Типовые поломки после переноса: нет бита исполнения, CRLF в shebang,
+        интерпретатор из несуществующего venv.
+        """
+        cache = config_path or Path("/root/.hermes/config.yaml")
+        if not cache.is_file():
+            return
+        text = cache.read_text(errors="replace")
+        hooks = re.findall(r"^\s*-?\s*command:\s*[\"']?([^\"'\n]*agent-hooks[^\"'\n]*)[\"']?\s*$", text, re.M)
+        hooks += re.findall(r"command:\s*[\"']?([^\"'\n]*\.py)[\"']?\s*$", text, re.M)
+        for raw in sorted({h.strip() for h in hooks if "agent-hooks" in h}):
+            path = Path(os.path.expanduser(raw))
+            if not path.is_file():
+                # fail_closed-хук без файла парализует агента: комментируем ссылку,
+                # оригинал конфига сохраняем рядом.
+                backup = cache.with_suffix(".yaml.bak-hooks")
+                if not backup.exists():
+                    shutil.copyfile(cache, backup)
+                lines = cache.read_text(errors="replace").splitlines()
+                changed = False
+                i = 0
+                while i < len(lines):
+                    line = lines[i]
+                    if str(raw) in line and not line.lstrip().startswith("#"):
+                        indent = len(line) - len(line.lstrip())
+                        lines[i] = "# отключено установщиком: файл хука отсутствует\n# " + line
+                        changed = True
+                        # закомментировать и вложенные параметры записи (fail_closed и пр.)
+                        j = i + 1
+                        while j < len(lines):
+                            nxt = lines[j]
+                            if not nxt.strip():
+                                j += 1
+                                continue
+                            if len(nxt) - len(nxt.lstrip()) <= indent:
+                                break
+                            lines[j] = "# " + nxt
+                            j += 1
+                        i = j
+                        continue
+                    i += 1
+                if changed:
+                    cache.write_text("\n".join(lines) + "\n")
+                    warn(f"хук {path} отсутствовал — отключил его в config.yaml (бэкап: {backup.name})")
+                else:
+                    warn(f"хук {path} отсутствует и не отключился автоматически")
+                continue
+            body = path.read_bytes()
+            fixed = False
+            if b"\r\n" in body:
+                path.write_bytes(body.replace(b"\r\n", b"\n"))
+                body = path.read_bytes()
+                fixed = True
+            mode = path.stat().st_mode
+            if not mode & 0o111:
+                os.chmod(path, mode | 0o755)
+                fixed = True
+            first = body.split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+            if first.startswith("#!"):
+                interp = first[2:].split()[0] if first[2:].split() else ""
+                if interp == "/usr/bin/env":
+                    target = first[2:].split()[1] if len(first[2:].split()) > 1 else ""
+                    ok_interp = shutil.which(target) is not None
+                else:
+                    ok_interp = Path(interp).is_file()
+                if not ok_interp:
+                    path.write_text("#!/usr/bin/env python3\n" + body.split(b"\n", 1)[1].decode("utf-8", "replace"))
+                    fixed = True
+                    warn(f"хук {path.name}: починил shebang на /usr/bin/env python3")
+            if fixed:
+                ok(f"хук {path.name}: права/shebang поправлены")
+            else:
+                ok(f"хук {path.name}: в порядке")
+
     def ensure_hermes_shim(self) -> None:
         """Сделать hermes доступным как команда: установщик кладёт бинарь
         в ~/.local/bin или ~/.hermes/..., а PATH у root их не содержит."""
@@ -2972,6 +3055,7 @@ WantedBy=timers.target
         self.run(["systemctl", "enable", "--now", "hermes-state-watch.service"], check=False)
         self.run(["loginctl", "enable-linger", "root"], check=False)
         self.ensure_hermes_gateway()
+        self.check_agent_hooks()
         ok("hermes-state-watch включён")
 
     # ── запуск ──────────────────────────────────────────────────────────────
