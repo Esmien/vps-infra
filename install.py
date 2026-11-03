@@ -1811,25 +1811,42 @@ class Installer:
         self.compose("config", "-q", quiet=True)
         ok("compose-файл валиден")
 
-        # Базовый образ WebUI собирается локально — если его нет, собираем.
-        if not self.image_exists("esmien/webui:local"):
-            info("собираю esmien/webui:local (может занять несколько минут)")
-            self.compose("build", "open-webui", stream=True, timeout=3600)
-            ok("образ WebUI собран")
-        else:
-            ok("образ esmien/webui:local уже есть")
+        # Образы, у которых в compose есть build:, нельзя тянуть из реестра —
+        # их собирают на месте (WebUI-брендинг, песочница). Иначе на чистой
+        # машине установщик падает на docker pull несуществующего :local-тега.
+        builds = self.compose_build_targets()
+        for img, service in builds.items():
+            if self.image_exists(img):
+                ok(f"{img} уже собран")
+                continue
+            info(f"собираю {img} ({service}, может занять несколько минут)")
+            self.compose("build", service, stream=True, timeout=3600)
+            ok(f"{img} собран")
 
         # Остальные образы тянем только если их нет: :latest-теги не должны
         # молча обновляться при повторном запуске установщика.
         missing = False
         for img in self.compose_images():
-            if img.startswith("esmien/webui"):
+            if img in builds:
                 continue
             if not self.image_exists(img):
                 info(f"тяну {img}")
                 self.run(["docker", "pull", img], stream=True, timeout=3600)
                 missing = True
         ok("образы на месте" if not missing else "образы загружены")
+
+    def compose_build_targets(self) -> dict[str, str]:
+        """Образы, которые собираются локально: {image: имя сервиса}."""
+        res = self.compose("config", "--format", "json", quiet=True)
+        try:
+            data = json.loads(res.stdout or "{}")
+        except json.JSONDecodeError:
+            return {}
+        targets: dict[str, str] = {}
+        for name, svc in (data.get("services") or {}).items():
+            if isinstance(svc, dict) and svc.get("build") and svc.get("image"):
+                targets[str(svc["image"])] = name
+        return targets
 
     def ensure_roles_and_databases(self) -> None:
         step("Роли и базы данных")
