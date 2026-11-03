@@ -28,6 +28,11 @@ fi
 anon=$(sudo -u postgres psql -d "$PG_DB" -Atc \
     "with d as (delete from \"LiteLLM_SpendLogs\" where coalesce(model,'')='' and \"startTime\" < now() - interval '1 day' returning 1) select count(*) from d")
 
+# Отказы (status='failure') в истории расходов не нужны: это шум от мёртвых
+# креденшелов и неподдерживаемых моделей. Успешные вызовы остаются всегда.
+failed=$(sudo -u postgres psql -d "$PG_DB" -Atc \
+    "with d as (delete from \"LiteLLM_SpendLogs\" where status='failure' and \"startTime\" < now() - interval '1 hour' returning 1) select count(*) from d")
+
 sudo -u postgres psql -d "$PG_DB" -q -c "vacuum (analyze) \"LiteLLM_SpendLogs\"" >>"$LOG" 2>&1
 
 stats=$(sudo -u postgres psql -d "$PG_DB" -Atc \
@@ -46,4 +51,4 @@ fi
 size=$(sudo -u postgres psql -d "$PG_DB" -Atc \
     "select pg_size_pretty(pg_total_relation_size('\"LiteLLM_SpendLogs\"')::bigint)")
 
-log "deleted=$deleted rows (retention ${RETENTION_DAYS}d), anon=$anon, vacuum_full=$full, table now $size"
+log "deleted=$deleted rows (retention ${RETENTION_DAYS}d), anon=$anon, failed=$failed, vacuum_full=$full, table now $size"
