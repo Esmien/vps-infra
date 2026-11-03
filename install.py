@@ -505,7 +505,7 @@ class Installer:
     def apt_install(self, packages: list[str]) -> None:
         if not packages:
             return
-        self.run(["apt-get", "update", "-qq"], check=True)
+        self.apt_update()
         self.run(
             ["apt-get", "install", "-y", "-qq", "--no-install-recommends", *packages],
             timeout=1800,
@@ -1534,21 +1534,77 @@ class Installer:
             die(f"в keyring нет ожидаемого отпечатка {self.PGDG_FPR}")
         ok("ключ pgdg проверен и установлен")
 
-    def apt_update_with_key_retry(self) -> None:
-        """apt-get update; при NO_PUBKEY — один раз переустановить ключ и повторить."""
+    PGDG_LIST = Path("/etc/apt/sources.list.d/pgdg.list")
+
+    def _apt_blob(self, res: subprocess.CompletedProcess) -> str:
+        return ((res.stdout or "") + (res.stderr or "")).strip()
+
+    def _neutralize_pgdg(self) -> None:
+        """Временно убрать pgdg из apt: без него не поставить gnupg и починить ключ."""
+        if not self.PGDG_LIST.exists():
+            return
+        backup = self.PGDG_LIST.with_suffix(".list.bak")
+        if not backup.exists():
+            shutil.copyfile(self.PGDG_LIST, backup)
+        if not self.dry:
+            self.PGDG_LIST.write_text(
+                "# временно отключено установщиком: ключ pgdg переустанавливается\n"
+            )
+
+    def _codename(self) -> str:
+        """Кодовое имя дистрибутива без зависимости от пакета lsb-release."""
+        rel = Path("/etc/os-release")
+        if rel.is_file():
+            for line in rel.read_text(errors="replace").splitlines():
+                if line.startswith("VERSION_CODENAME="):
+                    return line.split("=", 1)[1].strip().strip('"') or "noble"
+        if shutil.which("lsb_release"):
+            res = self.run(["lsb_release", "-cs"], check=False)
+            if res.returncode == 0 and (res.stdout or "").strip():
+                return res.stdout.strip()
+        return "noble"
+
+    def _write_pgdg_list(self) -> None:
+        codename = self._codename()
+        if not self.dry:
+            self.PGDG_LIST.write_text(
+                "deb [signed-by=/usr/share/keyrings/pgdg.gpg] "
+                f"https://apt.postgresql.org/pub/repos/apt {codename}-pgdg main\n"
+            )
+
+    def apt_update(self) -> None:
+        """apt-get update с самопочинкой репозитория pgdg.
+
+        Частый случай на повторном прогоне: в sources.list.d остался старый
+        pgdg.list, ключа нет — apt валит весь update с кодом 100 и блокирует
+        любой шаг, которому нужен apt. Чиним ключ, при необходимости ставим
+        gnupg, переписываем источник и только потом сдаёмся.
+        """
         res = self.run(["apt-get", "update", "-qq"], check=False)
         if res.returncode == 0:
             return
-        blob = ((res.stdout or "") + (res.stderr or ""))
-        if "NO_PUBKEY" in blob or "not signed" in blob:
-            warn("apt не увидел ключ pgdg — переустанавливаю и повторяю")
-            self.install_pgdg_key()
+        blob = self._apt_blob(res)
+        if "NO_PUBKEY" not in blob and "not signed" not in blob:
+            self.log(blob[-800:])
+            die(f"apt-get update не прошёл (rc={res.returncode}): {blob.splitlines()[-1][:160] if blob else ''}")
+
+        warn("apt не принимает подпись pgdg — переустанавливаю ключ")
+        if not (shutil.which("gpg") and shutil.which("curl")):
+            self._neutralize_pgdg()
             res = self.run(["apt-get", "update", "-qq"], check=False)
-            if res.returncode == 0:
-                return
-            blob = ((res.stdout or "") + (res.stderr or ""))
-        self.log(blob[-800:])
-        die(f"apt-get update не прошёл: {blob.strip().splitlines()[-1][:160] if blob.strip() else 'rc=' + str(res.returncode)}")
+            if res.returncode != 0:
+                self.log(self._apt_blob(res)[-800:])
+                die("apt-get update не прошёл даже без pgdg")
+            self.run(["apt-get", "install", "-y", "-qq", "--no-install-recommends",
+                      "gnupg", "curl", "ca-certificates"], timeout=900)
+        self.install_pgdg_key()
+        self._write_pgdg_list()
+        res = self.run(["apt-get", "update", "-qq"], check=False)
+        if res.returncode != 0:
+            blob = self._apt_blob(res)
+            self.log(blob[-800:])
+            die(f"pgdg не принимается и после переустановки ключа: {blob.splitlines()[-1][:160] if blob else ''}")
+        ok("репозиторий pgdg починен")
 
     def step_postgres(self) -> None:
         step(f"PostgreSQL {PG_VERSION} + pgvector")
@@ -1566,13 +1622,8 @@ class Installer:
             info(f"ставлю PostgreSQL {PG_VERSION} из pgdg")
             self.apt_install(["curl", "ca-certificates", "gnupg", "lsb-release"])
             self.install_pgdg_key()
-            codename = self.run(["lsb_release", "-cs"]).stdout.strip()
-            if not self.dry:
-                Path("/etc/apt/sources.list.d/pgdg.list").write_text(
-                    "deb [signed-by=/usr/share/keyrings/pgdg.gpg] "
-                    f"https://apt.postgresql.org/pub/repos/apt {codename}-pgdg main\n"
-                )
-            self.apt_update_with_key_retry()
+            self._write_pgdg_list()
+            self.apt_update()
             self.apt_install([
                 f"postgresql-{PG_VERSION}",
                 f"postgresql-client-{PG_VERSION}",
