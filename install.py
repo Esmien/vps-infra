@@ -279,6 +279,7 @@ STEPS: list[tuple[str, str]] = [
     ("verify", "Проверка результата"),
     ("health", "Проверка доступности сервисов"),
     ("hermes", "Hermes"),
+    ("postcheck", "Пост-проверка Hermes (таймер)"),
 ]
 STEP_NAMES = [s[0] for s in STEPS]
 
@@ -845,8 +846,7 @@ class Installer:
                     "Развернуть config/skills/скрипты Hermes из приватного репозитория?",
                     default=True,
                 )
-            if self.hermes_restore and not self.env.get("GITHUB_KEY"):
-                warn("GITHUB_KEY пуст — состояние Hermes развернуть не получится")
+            # состояние теперь тянется без токена (публичный hermes-state)
 
         # Внутренние секреты — только генерируются, спрашивать нечего.
         for key in (
@@ -2446,6 +2446,87 @@ server {{
 
     # ── проверка ────────────────────────────────────────────────────────────
 
+    POSTCHECK_PROMPT = """Ты — дежурный администратор этого сервера. Только что завершилось автоматическое развёртывание стека. Проведи короткую проверку соответствия живой машины нашей архитектуре и пришли отчёт владельцу.
+
+Что проверить (используй terminal и файлы стека в /home/ai_service/ai-stack и /root/vps-infra/assets):
+1. Контейнеры: все сервисы стека запущены, healthy, без лишних рестартов.
+2. HTTP: LiteLLM /health/liveliness, Open WebUI /health, SearXNG — отвечают 200.
+3. Postgres: базы webui_db и litellm_db доступны, таблицы на месте, расширение vector включено.
+4. Nginx: `nginx -t`, список включённых vhost'ов совпадает с ожидаемым, лимиты на API на месте.
+5. Сертификаты: срок действия TLS не меньше 30 дней.
+6. systemd: наши таймеры активны (бэкапы, watchdog'и, autorecover), fail2ban запущен.
+7. Бэкапы: последние дампы в /home/ai_service/ai-stack/backups/postgres не старше суток.
+8. Диск и память: свободное место больше 15%, swap не забит.
+9. Hermes: гейтвей работает, конфиг и скиллы на месте.
+
+Только чтение: не меняй конфиги, ничего не перезапускай и не удаляй — тебе нужно лишь собрать факты и отчитаться. Запускай только безопасные команды просмотра (docker ps, curl, systemctl status, psql -c SELECT, df, du).
+
+Формат ответа: не больше 25 строк, по-русски, без воды и без секретов. Сначала вердикт одной строкой («всё по топологии» или «есть отклонения»), затем только отклонения списком: что не так и что сделать. Если всё в порядке — перечисли одной строкой, что именно проверил. Не предлагай переустанавливать стек.
+"""
+
+    def step_postcheck(self) -> None:
+        """Одноразовый таймер: через N минут Hermes сам проверяет сервер и пишет в TG."""
+        step("Пост-проверка Hermes (таймер)")
+        if getattr(self.args, "no_postcheck", False):
+            info("--no-postcheck: таймер не ставлю")
+            return
+        if not shutil.which("hermes") and not Path("/usr/local/bin/hermes").is_file():
+            warn("Hermes не установлен — пост-проверку не ставлю")
+            return
+
+        delay = getattr(self.args, "postcheck_delay", "15min") or "15min"
+        prompt_path = Path("/etc/hermes-postcheck.prompt")
+        script_path = Path("/usr/local/bin/hermes-postcheck.sh")
+        service = Path("/etc/systemd/system/hermes-postcheck.service")
+        timer = Path("/etc/systemd/system/hermes-postcheck.timer")
+
+        if self.dry:
+            info(f"[dry-run] поставил бы таймер на +{delay}: hermes chat --oneshot → отчёт в Telegram")
+            return
+
+        self.write_file(prompt_path, self.POSTCHECK_PROMPT, 0o600)
+        self.write_file(script_path, """#!/bin/bash
+# Одноразовая пост-проверка сервера агентом Hermes. Отчёт уходит владельцу в Telegram.
+set -uo pipefail
+LOG=/var/log/hermes-postcheck.log
+REPORT=/var/lib/hermes-postcheck/report.md
+mkdir -p "$(dirname "$REPORT")"
+{
+    echo "=== пост-проверка $(date -u +%FT%TZ) ==="
+    /usr/local/bin/hermes chat --query-file /etc/hermes-postcheck.prompt --oneshot -Q --yolo 2>&1
+} > "$REPORT"
+/usr/local/bin/hermes send -t telegram -f "$REPORT" \
+    -s "Пост-проверка после развёртывания" >>"$LOG" 2>&1
+systemctl disable --now hermes-postcheck.timer >>"$LOG" 2>&1 || true
+exit 0
+""", 0o755)
+        self.write_file(service, """[Unit]
+Description=Hermes: пост-проверка сервера после развёртывания
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hermes-postcheck.sh
+TimeoutStartSec=1800
+Nice=10
+""", 0o644)
+        self.write_file(timer, f"""[Unit]
+Description=Одноразовый запуск пост-проверки Hermes через {delay} после развёртывания
+
+[Timer]
+OnActiveSec={delay}
+AccuracySec=1min
+Unit=hermes-postcheck.service
+
+[Install]
+WantedBy=timers.target
+""", 0o644)
+        self.run(["systemctl", "daemon-reload"], check=False)
+        self.run(["systemctl", "enable", "hermes-postcheck.timer"], check=False)
+        self.run(["systemctl", "restart", "hermes-postcheck.timer"], check=False)
+        ok(f"пост-проверка запустится через {delay}, отчёт придёт в Telegram")
+
     def step_verify(self) -> None:
         step("Проверка результата")
         healthy = True
@@ -2671,6 +2752,10 @@ server {{
 
     def step_hermes(self) -> None:
         step("Hermes")
+        if self.hermes_restore is None:
+            # Явный запуск шага hermes (--only hermes) означает «развернуть состояние»,
+            # если не сказано обратное: иначе шаг молча ничего не восстанавливает.
+            self.hermes_restore = True
         if self.args.hermes is False:
             info("--no-hermes: пропускаю")
             return
@@ -3028,6 +3113,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--yes", "-y", action="store_true", help="без вопросов: существующие значения/дефолты")
     p.add_argument("--reconfigure", action="store_true", help="переспросить параметры (Enter = оставить)")
     p.add_argument("--only", help="выполнить только шаги (через запятую)")
+    p.add_argument("--postcheck-delay", default="15min",
+                   help="через сколько после развёртывания Hermes проверит сервер (systemd-формат, default 15min)")
+    p.add_argument("--no-postcheck", dest="no_postcheck", action="store_true",
+                   help="не ставить таймер пост-проверки")
     p.add_argument("--skip", help="пропустить шаги (через запятую)")
     p.add_argument("--bundle", help="архив с дампами БД (путь или URL)")
     p.add_argument("--from-bot", action="store_true", help="взять последний бэкап БД из Telegram-бота")
