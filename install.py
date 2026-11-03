@@ -280,6 +280,7 @@ STEPS: list[tuple[str, str]] = [
     ("health", "Проверка доступности сервисов"),
     ("hermes", "Hermes"),
     ("postcheck", "Пост-проверка Hermes (таймер)"),
+    ("report", "Отчёт с секретами"),
 ]
 STEP_NAMES = [s[0] for s in STEPS]
 
@@ -712,6 +713,37 @@ class Installer:
             return default
         return ans in ("y", "yes", "д", "да")
 
+    def tty_read(self, label: str, secret: bool = False) -> str:
+        """Прочитать строку с терминала, даже если stdin занят (`curl … | bash`)."""
+        try:
+            fd = os.open("/dev/tty", os.O_RDWR)
+        except OSError:
+            return ""
+        attrs = None
+        try:
+            os.write(fd, f"  {label}: ".encode())
+            if secret:
+                import termios
+                attrs = termios.tcgetattr(fd)
+                quiet = [*attrs]
+                quiet[3] &= ~termios.ECHO
+                termios.tcsetattr(fd, termios.TCSADRAIN, quiet)
+            buf = b""
+            while True:
+                ch = os.read(fd, 1)
+                if not ch or ch in (b"\n", b"\r"):
+                    break
+                buf += ch
+            return buf.decode(errors="replace").strip()
+        except OSError:
+            return ""
+        finally:
+            if attrs is not None:
+                import termios
+                termios.tcsetattr(fd, termios.TCSADRAIN, attrs)
+                os.write(fd, b"\n")
+            os.close(fd)
+
     def prompt(
         self,
         store: dict,
@@ -724,7 +756,8 @@ class Installer:
         hint: str | None = None,
     ) -> str:
         cur = (store.get(key) or default or "").strip()
-        if self.args.yes or not sys.stdin.isatty():
+        tty_ok = Path("/dev/tty").exists()
+        if self.args.yes or (not sys.stdin.isatty() and not tty_ok):
             if required and not cur:
                 die(f"нет значения для «{label}». Запустите без --yes и введите его.")
             store[key] = cur
@@ -735,10 +768,13 @@ class Installer:
         while True:
             suffix = f" [{shown}]" if shown else ""
             try:
-                if secret:
-                    val = getpass.getpass(f"  {label}{suffix}: ")
+                if sys.stdin.isatty():
+                    if secret:
+                        val = getpass.getpass(f"  {label}{suffix}: ")
+                    else:
+                        val = input(f"  {label}{suffix}: ")
                 else:
-                    val = input(f"  {label}{suffix}: ")
+                    val = self.tty_read(f"{label}{suffix}", secret=secret)
             except EOFError:
                 val = ""
             val = val.strip()
@@ -2486,6 +2522,103 @@ server {{
 Формат ответа: не больше 25 строк, по-русски, без воды и без секретов. Сначала вердикт одной строкой («всё по топологии» или «есть отклонения»), затем только отклонения списком: что не так и что сделать. Если всё в порядке — перечисли одной строкой, что именно проверил. Не предлагай переустанавливать стек.
 """
 
+    REPORT_FILES = (
+        ("ai/.env", "OPEN WEBUI / LITELLM"),
+        ("notifications/.env", "БОТЫ УВЕДОМЛЕНИЙ"),
+        ("/root/.hermes/.env", "HERMES"),
+    )
+
+    def report_groups(self) -> list[tuple[str, list[str]]]:
+        """Секреты, сгруппированные по файлам — как они лежат на диске."""
+        out = []
+        paths = {
+            "ai/.env": self.compose_dir / ".env",
+            "notifications/.env": NOTIF_DIR / ".env",
+            "/root/.hermes/.env": Path("/root/.hermes/.env"),
+        }
+        for label, title in self.REPORT_FILES:
+            path = paths[label]
+            if not path.is_file():
+                continue
+            lines = [ln.strip() for ln in path.read_text(errors="replace").splitlines()]
+            lines = [ln for ln in lines if ln and not ln.startswith("#")]
+            if lines:
+                out.append((f"{title}  ({label})", lines))
+        cfg_env = self.cfg.get("telegram") or {}
+        extra = [f"BOT_OWNER={cfg_env.get('owner', '')}"] if cfg_env.get("owner") else []
+        if extra:
+            out.append(("ПАРАМЕТРЫ УСТАНОВКИ", extra))
+        return out
+
+    def step_report(self) -> None:
+        """Отчёт с секретами: зашифрованный файл + ключ отдельным сообщением."""
+        step("Отчёт с секретами в Telegram")
+        if getattr(self.args, "no_report", False):
+            info("--no-report: отчёт не отправляю")
+            return
+        nenv = parse_env(NOTIF_DIR / ".env")
+        token = nenv.get("BOT_TOKEN") or nenv.get("FILE_BOT_TOKEN") or ""
+        owner = nenv.get("BOT_OWNER") or (self.cfg.get("telegram") or {}).get("owner") or ""
+        if not token or not owner:
+            warn("нет токена бота или chat_id владельца — отчёт пропущен")
+            return
+        groups = self.report_groups()
+        if not groups:
+            warn("нечего отправлять: .env файлы не найдены")
+            return
+        if self.dry:
+            info(f"[dry-run] отправил бы {sum(len(v) for _, v in groups)} строк в чат {owner}")
+            return
+
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        lines = [f"Установка {stamp} UTC", ""]
+        for title, body in groups:
+            lines.append(f"### {title}")
+            lines.extend(body)
+            lines.append("")
+        payload = "\n".join(lines)
+
+        key = secrets.token_urlsafe(32)
+        enc_path = STATE_DIR / f"secrets-{stamp}.enc"
+        proc = subprocess.run(
+            ["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", "200000",
+             "-salt", "-pass", f"pass:{key}", "-out", str(enc_path)],
+            input=payload.encode(), capture_output=True,
+        )
+        if proc.returncode != 0:
+            warn("не удалось зашифровать отчёт — секреты не отправляю")
+            return
+        os.chmod(enc_path, 0o600)
+
+        api = f"https://api.telegram.org/bot{token}"
+        send = self.run(
+            ["curl", "-fsS", "--max-time", "120", "-F", f"chat_id={owner}",
+             "-F", "caption=Секреты установки (зашифровано). Ключ — следующим сообщением.",
+             "-F", f"document=@{enc_path}"],
+            check=False, quiet=True,
+        )
+        if send.returncode != 0:
+            warn("файл с секретами не отправился (проверьте токен/чат)")
+            return
+        ok("файл с секретами отправлен")
+
+        instructions = (
+            "Ключ к архиву секретов (сохраните и удалите это сообщение):\n"
+            f"{key}\n\n"
+            "Расшифровка:\n"
+            f"openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in secrets-{stamp}.enc "
+            "-out secrets.txt -pass pass:<ключ>"
+        )
+        self.run(["curl", "-fsS", "--max-time", "60", "-X", "POST",
+                  f"{api}/sendMessage", "-d", f"chat_id={owner}",
+                  "--data-urlencode", f"text={instructions}"], check=False, quiet=True)
+        self.run(["curl", "-fsS", "--max-time", "60", "-X", "POST",
+                  f"{api}/sendMessage", "-d", f"chat_id={owner}",
+                  "--data-urlencode",
+                  "text=Сообщение с ключом удалите из чата сразу после сохранения: "
+                  "кто видел ключ и файл — прочитает секреты."], check=False, quiet=True)
+        ok("ключ отправлен отдельным сообщением")
+
     def step_postcheck(self) -> None:
         """Одноразовый таймер: через N минут Hermes сам проверяет сервер и пишет в TG."""
         step("Пост-проверка Hermes (таймер)")
@@ -3245,6 +3378,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="через сколько после развёртывания Hermes проверит сервер (systemd-формат, default 15min)")
     p.add_argument("--no-postcheck", dest="no_postcheck", action="store_true",
                    help="не ставить таймер пост-проверки")
+    p.add_argument("--no-report", dest="no_report", action="store_true",
+                   help="не отправлять отчёт с секретами в Telegram")
     p.add_argument("--no-ask-hermes", dest="no_ask_hermes", action="store_true",
                    help="не спрашивать про Hermes, действовать по флагам (для автоматизации)")
     p.add_argument("--skip", help="пропустить шаги (через запятую)")

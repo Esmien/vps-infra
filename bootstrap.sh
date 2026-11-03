@@ -58,13 +58,44 @@ if [[ -z "$ENV_FILE" ]]; then
         [[ -f "$cand" ]] && { ENV_FILE="$cand"; break; }
     done
 fi
-[[ -n "$ENV_FILE" && -f "$ENV_FILE" ]] || die "не найден файл стартовых секретов (VPS_BOOTSTRAP_ENV или /root/bootstrap.env)"
-say "стартовые секреты: $ENV_FILE"
-set -a
-# shellcheck disable=SC1090
-. "$ENV_FILE"
-set +a
-chmod 600 "$ENV_FILE" 2>/dev/null || true
+
+# Вопрос через /dev/tty: stdin занят потоком `curl … | bash`.
+tty_ask() {
+    local prompt="$1" secret="${2:-0}" line=""
+    [[ -e /dev/tty ]] || { printf ''; return 0; }
+    printf '  %s: ' "$prompt" >/dev/tty
+    if [[ "$secret" == "1" ]]; then
+        stty -echo </dev/tty
+        IFS= read -r line </dev/tty || true
+        stty echo </dev/tty
+        printf '\n' >/dev/tty
+    else
+        IFS= read -r line </dev/tty || true
+    fi
+    printf '%s' "$line"
+}
+
+INTERACTIVE=0
+if [[ -n "$ENV_FILE" && -f "$ENV_FILE" ]]; then
+    say "стартовые секреты: $ENV_FILE"
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
+    chmod 600 "$ENV_FILE" 2>/dev/null || true
+else
+    INTERACTIVE=1
+    say "файла стартовых секретов нет — спрошу необходимое (Enter — оставить пустым)"
+fi
+
+if [[ -z "${TG_FILE_TOKEN:-}" && "$INTERACTIVE" == "1" ]]; then
+    TG_FILE_TOKEN="$(tty_ask 'Токен файл-бота (TG_FILE_TOKEN)' 1)"
+    export TG_FILE_TOKEN
+fi
+if [[ -z "${SECRETS_KEY:-}" && "$INTERACTIVE" == "1" ]]; then
+    SECRETS_KEY="$(tty_ask 'Пароль архива секретов (SECRETS_KEY)' 1)"
+    export SECRETS_KEY
+fi
 
 # GITHUB_TOKEN и GITHUB_KEY — одно и то же, принимаем любой из вариантов
 if [[ -z "${GITHUB_TOKEN:-}" && -n "${GITHUB_KEY:-}" ]]; then
@@ -143,9 +174,11 @@ chmod 600 "$KEY_PATH"
 ok "пароль архива записан: $KEY_PATH"
 
 # ── аргументы установщика ───────────────────────────────────────────────────
-args=(--yes --secrets-from-bot --secrets-key "$KEY_PATH"
+args=(--secrets-from-bot --secrets-key "$KEY_PATH"
       --tg-token "$TG_FILE_TOKEN" --from-bot
       --hermes --restore-hermes)
+# В интерактивном режиме НЕ глотаем вопросы установщика.
+[[ "$INTERACTIVE" == "1" ]] || args=(--yes "${args[@]}")
 [[ "${WITH_TLS:-0}" == "1" ]] || args+=(--skip-tls)
 [[ -n "${BOT_TOKEN:-}" ]]      && args+=(--bot-token "$BOT_TOKEN")
 [[ -n "${FILE_BOT_TOKEN:-}" ]] && args+=(--file-bot-token "$FILE_BOT_TOKEN")
