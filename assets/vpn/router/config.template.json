@@ -252,6 +252,17 @@
    },
    {
     "type": "field",
+    "domain": [
+     "domain:gemini.google.com",
+     "domain:bard.google.com",
+     "domain:aistudio.google.com",
+     "domain:generativelanguage.googleapis.com",
+     "domain:ai.google.dev"
+    ],
+    "outboundTag": "fr"
+   },
+   {
+    "type": "field",
     "outboundTag": "blocked",
     "protocol": [
      "bittorrent"
