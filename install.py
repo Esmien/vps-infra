@@ -2711,6 +2711,20 @@ WantedBy=timers.target
         names = [line.strip() for line in (res.stdout or "").splitlines() if line.strip()]
         return [n for n in names if not n.startswith("_")]
 
+    def fetch_real_hook(self, path: Path) -> bool:
+        """Забрать рабочий хук из hermes-state, если локально оказался шаблон-заглушка."""
+        if not path.is_file() or b"000000000" not in path.read_bytes():
+            return False
+        raw = (f"https://raw.githubusercontent.com/{HERMES_STATE_REPO}/"
+               f"{HERMES_STATE_BRANCH}/hermes/agent-hooks/{path.name}")
+        res = self.run(["curl", "-fsSL", "--max-time", "30", "-o", str(path), raw], check=False, quiet=True)
+        if res.returncode != 0 or not path.is_file() or b"000000000" in path.read_bytes():
+            warn(f"хук {path.name}: заглушка не заменилась — гейт никого не ограничивает")
+            return False
+        os.chmod(path, 0o755)
+        ok(f"хук {path.name}: забрал рабочий файл из {HERMES_STATE_REPO}")
+        return True
+
     def check_agent_hooks(self, config_path: Path | None = None) -> None:
         """Проверить хуки Hermes: битый хук с fail_closed блокирует все инструменты.
 
@@ -2736,7 +2750,8 @@ WantedBy=timers.target
                     path.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(template, path)
                     os.chmod(path, 0o755)
-                    warn(f"хук {path.name} восстановлен из шаблона — проверьте RESTRICTED_USERS (сейчас там заглушка)")
+                    warn(f"хук {path.name} восстановлен из шаблона — внутри ЗАГЛУШКА, гейт никого не ограничивает")
+                    self.fetch_real_hook(path)
                     continue
                 # Файла и шаблона нет: fail_closed-хук парализует агента, поэтому
                 # комментируем ссылку, а оригинал конфига сохраняем рядом.
@@ -2773,6 +2788,8 @@ WantedBy=timers.target
                     warn(f"хук {path} отсутствует и не отключился автоматически")
                 continue
             body = path.read_bytes()
+            if b"000000000" in body and self.fetch_real_hook(path):
+                body = path.read_bytes()
             fixed = False
             if b"\r\n" in body:
                 path.write_bytes(body.replace(b"\r\n", b"\n"))
