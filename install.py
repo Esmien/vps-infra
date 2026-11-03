@@ -484,7 +484,9 @@ class Installer:
         except subprocess.TimeoutExpired:
             die(f"команда не завершилась за {timeout}s: {printable}")
         except FileNotFoundError:
-            die(f"команда не найдена: {cmd[0]}")
+            if check:
+                die(f"команда не найдена: {cmd[0]}")
+            res = subprocess.CompletedProcess(cmd, 127, "", f"команда не найдена: {cmd[0]}")
         if check and res.returncode != 0:
             self.log(f"! exit {res.returncode}")
             out = (res.stdout or "") + (res.stderr or "")
@@ -1505,8 +1507,10 @@ class Installer:
         step(f"PostgreSQL {PG_VERSION} + pgvector")
         cluster = Path(f"/etc/postgresql/{PG_VERSION}/main")
         need = False
-        res = self.run(["psql", "--version"], check=False)
-        if res.returncode != 0 or f" {PG_VERSION}." not in (res.stdout or ""):
+        res = None
+        if shutil.which("psql"):
+            res = self.run(["psql", "--version"], check=False)
+        if res is None or res.returncode != 0 or f" {PG_VERSION}." not in (res.stdout or ""):
             need = True
         if not cluster.is_dir():
             need = True
