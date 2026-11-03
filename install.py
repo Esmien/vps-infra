@@ -1305,9 +1305,19 @@ class Installer:
             except (OSError, json.JSONDecodeError):
                 warn(f"локальный реестр повреждён: {local}")
 
-        if not self.env.get("GITHUB_KEY"):
-            info("GITHUB_KEY не задан — реестр из hermes-state недоступен")
-            return None
+        # публичный репозиторий: raw отдаёт файл без токена и без лимитов API
+        raw_url = (
+            f"https://raw.githubusercontent.com/{HERMES_STATE_REPO}/{HERMES_STATE_BRANCH}"
+            "/host/backups/tg-registry.json"
+        )
+        try:
+            return json.loads(self.http_get(raw_url))
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                warn(f"реестр из raw.githubusercontent: HTTP {exc.code}")
+        except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+            warn(f"реестр из raw.githubusercontent: {exc}")
+
         url = (
             f"https://api.github.com/repos/{HERMES_STATE_REPO}/contents/"
             f"host/backups/tg-registry.json?ref={HERMES_STATE_BRANCH}"

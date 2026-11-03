@@ -73,7 +73,7 @@ if [[ -z "${GITHUB_TOKEN:-}" && -n "${GITHUB_KEY:-}" ]]; then
 fi
 
 missing_vars=()
-[[ -n "${GITHUB_TOKEN:-}" ]]    || missing_vars+=("GITHUB_TOKEN (или GITHUB_KEY)")
+# GITHUB_TOKEN необязателен: репозиторий публичный
 [[ -n "${SECRETS_KEY:-}" ]]     || missing_vars+=("SECRETS_KEY")
 [[ -n "${TG_FILE_TOKEN:-}" ]]   || missing_vars+=("TG_FILE_TOKEN")
 if (( ${#missing_vars[@]} )); then
@@ -109,18 +109,25 @@ fi
 ok "зависимости на месте"
 
 # ── репозиторий (приватный: клон по токену) ─────────────────────────────────
-AUTH_URL="https://x-access-token:${GITHUB_TOKEN}@${REPO_URL#https://}"
+# Репозиторий публичный: токен нужен только для приватного. Авторизуемся
+# заголовком, чтобы креды не попадали ни в URL, ни в .git/config.
+AUTH_ARGS=()
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    _basic="$(printf '%s' "x-access-token:${GITHUB_TOKEN}" | base64 -w0)"
+    AUTH_ARGS=(-c "http.extraheader=Authorization: Basic ${_basic}")
+fi
+AUTH_URL="$REPO_URL"
 if [[ -d "$DEST/.git" ]]; then
     say "обновляю $DEST"
     git -C "$DEST" remote set-url origin "$AUTH_URL"
-    git -C "$DEST" fetch --depth=1 origin "$BRANCH" --quiet
+    git -C "$DEST" "${AUTH_ARGS[@]}" fetch --depth=1 origin "$BRANCH" --quiet
     git -C "$DEST" reset --hard FETCH_HEAD --quiet
     git -C "$DEST" clean -fdq -e '*.env' -e 'bundle*'
 else
     say "клонирую репозиторий → $DEST"
     mkdir -p "$(dirname "$DEST")"
-    git clone --depth=1 --branch "$BRANCH" "$AUTH_URL" "$DEST" --quiet \
-        || die "не удалось склонировать (проверьте GITHUB_TOKEN и доступ к репозиторию)"
+    git "${AUTH_ARGS[@]}" clone --depth=1 --branch "$BRANCH" "$AUTH_URL" "$DEST" --quiet \
+        || die "не удалось склонировать $REPO_URL (проверьте сеть и доступ)"
 fi
 # токен не должен остаться в .git/config
 git -C "$DEST" remote set-url origin "$REPO_URL"
