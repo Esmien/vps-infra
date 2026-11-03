@@ -2740,13 +2740,48 @@ server {{
                 n += 1
         return n
 
+    def quarantine_extra_skills(self, src: Path, dest: Path) -> None:
+        """Убрать скиллы, которых нет в восстановленном наборе.
+
+        Официальный установщик Hermes кладёт десятки демо-скиллов. После
+        восстановления из hermes-state они остаются и всплывают в списке как
+        рабочие. Переносим лишнее в карантин (не удаляем), сверяя дерево
+        рекурсивно: и категории, и скиллы внутри них.
+        """
+        if not src.is_dir() or not dest.is_dir():
+            return
+        vault = dest.parent / "skills_removed" / time.strftime("%Y%m%d_%H%M%S")
+        moved = self._quarantine_walk(src, dest, vault)
+        if moved:
+            ok(f"лишние скиллы убраны в {vault} ({moved})")
+
+    def _quarantine_walk(self, src: Path, dest: Path, vault: Path) -> int:
+        """Рекурсивно перенести в vault то, чего нет в src."""
+        keep = {p.name for p in src.iterdir()}
+        moved = 0
+        for path in list(dest.iterdir()):
+            if path.name in keep:
+                twin = src / path.name
+                if path.is_dir() and twin.is_dir():
+                    moved += self._quarantine_walk(twin, path, vault)
+                continue
+            if path.name == ".git":
+                continue
+            if self.dry:
+                moved += 1
+                continue
+            vault.mkdir(parents=True, exist_ok=True)
+            target = vault / path.name
+            if target.exists():
+                target = vault / f"{path.name}.{int(time.time())}"
+            shutil.move(str(path), str(target))
+            moved += 1
+        return moved
+
     def restore_hermes_state(self) -> None:
         """Разворачивает config/skills/скрипты/юниты из приватного hermes-state."""
         step("Состояние Hermes из приватного репозитория")
         key = self.env.get("GITHUB_KEY", "")
-        if not key:
-            warn("GITHUB_KEY не задан — состояние Hermes не разворачиваю")
-            return
         prefix = Path(os.environ.get("HERMES_RESTORE_ROOT", "/"))
         sandbox = prefix != Path("/")
 
@@ -2764,10 +2799,17 @@ server {{
         work = STATE_DIR / "hermes-state"
         self.ensure_dir(work, 0o700)
         archive = work / "state.tar.gz"
-        url = f"https://api.github.com/repos/{HERMES_STATE_REPO}/tarball/{HERMES_STATE_BRANCH}"
+        # Публичный репозиторий тянем через codeload (без токена и лимитов API),
+        # приватный — через API с токеном.
+        if key:
+            url = f"https://api.github.com/repos/{HERMES_STATE_REPO}/tarball/{HERMES_STATE_BRANCH}"
+            headers = {"Authorization": f"Bearer {key}"}
+        else:
+            url = f"https://codeload.github.com/{HERMES_STATE_REPO}/tar.gz/refs/heads/{HERMES_STATE_BRANCH}"
+            headers = {}
         info(f"скачиваю {HERMES_STATE_REPO}@{HERMES_STATE_BRANCH}")
         try:
-            archive.write_bytes(self.http_get(url, headers={"Authorization": f"Bearer {key}"}, timeout=300))
+            archive.write_bytes(self.http_get(url, headers=headers, timeout=300))
         except (urllib.error.URLError, OSError) as exc:
             warn(f"репозиторий состояния недоступен: {exc} — продолжаю без него")
             return
@@ -2800,6 +2842,7 @@ server {{
 
         copied = 0
         copied += self.restore_tree(src / "hermes", dst(HERMES_HOME), "root")
+        self.quarantine_extra_skills(src / "hermes" / "skills", dst(HERMES_HOME) / "skills")
         copied += self.restore_tree(src / "host" / "bin", dst("/usr/local/bin"), "root")
         copied += self.restore_tree(src / "host" / "systemd", dst("/etc/systemd/system"), "root")
         # git не хранит права: возвращаем 0600 файлам, которые в снапшоте писались закрыто.
