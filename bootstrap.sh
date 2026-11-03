@@ -154,7 +154,7 @@ args=(--yes --secrets-from-bot --secrets-key "$KEY_PATH"
 [[ -n "${EXTRA_ARGS:-}" ]]     && read -r -a extra <<< "$EXTRA_ARGS" && args+=("${extra[@]}")
 [[ "${BOOTSTRAP_DRY:-0}" == "1" ]] && args+=(--dry-run)
 
-export GITHUB_KEY="$GITHUB_TOKEN"
+export GITHUB_KEY="${GITHUB_TOKEN:-${GITHUB_KEY:-}}"   # токен необязателен: репо публичные
 export HERMES_INSTALL_ARGS="${HERMES_INSTALL_ARGS:---non-interactive}"
 
 say "запускаю установщик (${#args[@]} аргументов)"
