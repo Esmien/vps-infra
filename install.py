@@ -59,9 +59,11 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import termios
 import threading
 import time
 import traceback
+import tty
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -3349,6 +3351,183 @@ def do_export(args: argparse.Namespace) -> int:
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
 
+# ── интерактивный выбор флагов (запуск без аргументов) ──────────────────────
+
+FLAGS_STORE = Path("/etc/vps-infra/install-flags.json")
+
+MENU_ITEMS: tuple[tuple[str, tuple[str, ...], str, str], ...] = (
+    ("yes",         ("--yes",),               "Без вопросов",           "брать значения из существующих .env, ничего не спрашивать"),
+    ("dry",         ("--dry-run",),           "Только план",            "показать, что будет сделано, и выйти"),
+    ("skip_tls",    ("--skip-tls",),          "Без TLS",                "не трогать nginx и сертификаты"),
+    ("skip_rest",   ("--skip-restore",),      "Не трогать базы",        "пропустить восстановление БД"),
+    ("restore",     ("--restore",),           "Восстановить поверх",    "применить дампы, даже если данные уже есть"),
+    ("from_bot",    ("--from-bot",),          "Дампы из Telegram",      "взять последний бэкап БД из файл-бота"),
+    ("secrets",     ("--secrets-from-bot",),  "Секреты из Telegram",    "разложить .env из зашифрованного архива"),
+    ("rest_hermes", ("--restore-hermes",),    "Состояние Hermes",       "config/skills/скрипты из hermes-state"),
+    ("hermes",      ("--hermes",),            "Установить Hermes",      "агент в хостовом режиме"),
+    ("no_post",     ("--no-postcheck",),      "Без пост-проверки",      "не ставить таймер проверки через 15 минут"),
+    ("no_report",   ("--no-report",),         "Без отчёта с секретами", "не отправлять архив .env в Telegram"),
+    ("reconf",      ("--reconfigure",),       "Переспросить секреты",   "Enter — оставить текущее значение"),
+)
+
+# пары «взаимоисключающие»: включение одного гасит другое
+MENU_EXCLUSIVE = (("skip_rest", "restore"), ("yes", "reconf"))
+
+
+def load_saved_flags() -> set[str]:
+    """Флаги прошлого запуска — чтобы чек-лист открывался с ними."""
+    try:
+        data = json.loads(FLAGS_STORE.read_text())
+        saved = set(data.get("flags") or [])
+    except (OSError, ValueError):
+        return set()
+    picked = set()
+    for item_id, flags, _t, _d in MENU_ITEMS:
+        if saved and all(f in saved for f in flags):
+            picked.add(item_id)
+    return picked
+
+
+def save_flags(flags: list[str]) -> None:
+    try:
+        FLAGS_STORE.parent.mkdir(parents=True, exist_ok=True)
+        FLAGS_STORE.write_text(
+            json.dumps({"flags": flags, "saved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                       ensure_ascii=False, indent=2) + "\n"
+        )
+        FLAGS_STORE.chmod(0o644)
+    except OSError:
+        pass
+
+
+class FlagMenu:
+    """Чек-лист флагов: ↑/↓ — курсор, пробел — галочка, Enter — подтверждение, q — выход."""
+
+    CLEAR = "\033[H\033[2J"
+
+    def __init__(self, argv_hint: str) -> None:
+        self.argv_hint = argv_hint
+        self.selected = load_saved_flags()
+        self.cursor = 0
+        self.stage = "list"
+
+    # ── состояние ──
+    def flags(self) -> list[str]:
+        out: list[str] = []
+        for item_id, flags, _title, _desc in MENU_ITEMS:
+            if item_id in self.selected:
+                out.extend(flags)
+        return out
+
+    def toggle(self) -> None:
+        item_id = MENU_ITEMS[self.cursor][0]
+        if item_id in self.selected:
+            self.selected.discard(item_id)
+            return
+        self.selected.add(item_id)
+        for a, b in MENU_EXCLUSIVE:
+            if item_id == a:
+                self.selected.discard(b)
+            elif item_id == b:
+                self.selected.discard(a)
+
+    # ── отрисовка ──
+    def draw(self, out) -> None:
+        lines: list[str] = [self.CLEAR + "\033[?25l"]
+        if self.stage == "list":
+            lines.append(f"{C_BOLD}Установка инфраструктуры VPS{C_RESET}   {C_DIM}выбор флагов{C_RESET}")
+            lines.append("")
+            lines.append(f"{C_DIM}  ↑/↓ или j/k — двигаться · пробел — включить/выключить · Enter — дальше · q — выход{C_RESET}")
+            lines.append("")
+            for idx, (item_id, flags, title, _desc) in enumerate(MENU_ITEMS):
+                mark = f"{C_GREEN}[x]{C_RESET}" if item_id in self.selected else f"{C_DIM}[ ]{C_RESET}"
+                pointer = f"{C_CYAN}❯{C_RESET}" if idx == self.cursor else " "
+                label = f"{C_BOLD}{title}{C_RESET}" if idx == self.cursor else title
+                lines.append(f"  {pointer} {mark} {label} {C_DIM}({' '.join(flags)}){C_RESET}")
+            lines.append("")
+            chosen = self.flags()
+            tail = " ".join(chosen) if chosen else "(без флагов — обычная интерактивная установка)"
+            lines.append(f"{C_DIM}  итог:{C_RESET} python3 install.py {tail}")
+        else:
+            cmd = f"{self.argv_hint} " + (" ".join(self.flags()) if self.flags() else "")
+            lines.append(f"{C_BOLD}Проверь и подтверди{C_RESET}")
+            lines.append("")
+            lines.append(f"  {C_CYAN}{cmd.strip()}{C_RESET}")
+            lines.append("")
+            picked = [t for i, _f, t, _d in MENU_ITEMS if i in self.selected]
+            if picked:
+                for title in picked:
+                    lines.append(f"  {C_GREEN}✓{C_RESET} {title}")
+            else:
+                lines.append(f"  {C_DIM}флагов нет: установщик пойдёт обычным путём и задаст свои вопросы{C_RESET}")
+            lines.append("")
+            lines.append(f"{C_BOLD}  Y{C_RESET} — выполнить    {C_BOLD}n{C_RESET} — вернуться к выбору {C_DIM}(по умолчанию n){C_RESET}")
+        out.write("\n".join(lines) + "\n")
+        out.flush()
+
+    # ── ввод ──
+    @staticmethod
+    def read_key(fd: int) -> str:
+        ch = os.read(fd, 1)
+        if ch == b"\x03":                      # Ctrl-C
+            return "quit"
+        if ch in (b"\r", b"\n"):
+            return "enter"
+        if ch == b" ":
+            return "space"
+        if ch == b"\x1b":
+            seq = os.read(fd, 2) if True else b""
+            return {b"[A": "up", b"[B": "down", b"[C": "right", b"[D": "left"}.get(seq, "esc")
+        try:
+            return ch.decode()
+        except UnicodeDecodeError:
+            return ""
+
+
+def run_flag_menu(argv_hint: str) -> list[str] | None:
+    """Возвращает список флагов либо None, если меню недоступно/отменено."""
+    try:
+        tty_out = open("/dev/tty", "w")
+        tty_in = open("/dev/tty", "rb", buffering=0)
+    except OSError:
+        return None
+    fd = tty_in.fileno()
+    menu = FlagMenu(argv_hint)
+    try:
+        old = termios.tcgetattr(fd)
+    except termios.error:
+        return None
+    try:
+        tty.setraw(fd)
+        while True:
+            menu.draw(tty_out)
+            key = menu.read_key(fd)
+            if menu.stage == "list":
+                if key in ("up", "k"):
+                    menu.cursor = (menu.cursor - 1) % len(MENU_ITEMS)
+                elif key in ("down", "j"):
+                    menu.cursor = (menu.cursor + 1) % len(MENU_ITEMS)
+                elif key in ("space", "x"):
+                    menu.toggle()
+                elif key == "enter":
+                    menu.stage = "confirm"
+                elif key in ("q", "quit", "esc"):
+                    return "abort"
+            else:
+                if key in ("y", "Y", "н", "Н"):
+                    flags = menu.flags()
+                    save_flags(flags)
+                    return flags
+                if key in ("n", "N", "т", "Т", "enter", "q", "quit", "esc"):
+                    menu.stage = "list"
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        tty_out.write("\033[?25h\n")
+        tty_out.flush()
+        tty_in.close()
+        tty_out.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="install.py",
@@ -3357,7 +3536,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Шаги: " + ", ".join(STEP_NAMES) + "\n"
             "Примеры:\n"
-            "  sudo python3 install.py\n"
+            "  sudo python3 install.py            # интерактивный выбор флагов (чек-лист)\n"
             "  sudo python3 install.py --yes\n"
             "  sudo python3 install.py check\n"
             "  sudo python3 install.py --only stack,units,verify\n"
@@ -3423,6 +3602,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str]) -> int:
+    if not argv:
+        picked = run_flag_menu(f"python3 {Path(__file__).resolve()}")
+        if picked == "abort":
+            print("отменено")
+            return 130
+        if isinstance(picked, list):
+            argv = picked
+            if os.environ.get("VPS_MENU_PRINT"):
+                print(json.dumps(argv))
+                return 0
+
     args = build_parser().parse_args(argv)
 
     if args.command == "export":
