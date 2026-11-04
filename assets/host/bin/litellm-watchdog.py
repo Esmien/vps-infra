@@ -304,7 +304,9 @@ def main() -> int:
         )
         send(text, no_send)
         d = collect("drill", f"учебная тревога, проба {detail}", container, drill=True)
+        prev_agent = state.get("last_agent", 0)
         launch_agent(d, state, no_send)
+        state["last_agent"] = prev_agent  # учения не должны съедать кулдаун боевого разбора
         write_state(state)
         return 0
 
