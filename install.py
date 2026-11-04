@@ -3287,6 +3287,7 @@ WantedBy=timers.target
             warn(f"завершено за {elapsed:.0f} c, есть проблемы: {'; '.join(self.failed)}")
             return 2
         ok(f"готово за {elapsed:.0f} c")
+        info(f"ранбук проверки сервера: {ROOT / 'REPORT.md'} — отдайте его агенту или откройте раздел 1")
         if self.dry:
             info("это был --dry-run, изменений нет")
         return 0
