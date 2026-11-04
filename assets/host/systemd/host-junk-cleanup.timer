@@ -1,0 +1,11 @@
+[Unit]
+Description=Run host-junk-cleanup daily at 04:40 UTC
+
+[Timer]
+OnCalendar=*-*-* 04:40:00 UTC
+Persistent=true
+RandomizedDelaySec=10min
+Unit=host-junk-cleanup.service
+
+[Install]
+WantedBy=timers.target

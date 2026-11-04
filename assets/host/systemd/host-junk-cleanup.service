@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily cleanup of safe regenerable junk (docker cache/images, snap revisions, journald, apt, /tmp)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/host-junk-cleanup.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
