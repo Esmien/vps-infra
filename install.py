@@ -52,6 +52,7 @@ import json
 import os
 import re
 import secrets
+import select
 import shlex
 import shutil
 import socket
@@ -3476,7 +3477,13 @@ class FlagMenu:
         if ch == b" ":
             return "space"
         if ch == b"\x1b":
-            seq = os.read(fd, 2) if True else b""
+            # стрелка приходит как ESC [ A — байты могут приехать не сразу
+            seq = b""
+            while len(seq) < 2:
+                ready, _, _ = select.select([fd], [], [], 0.05)
+                if not ready:
+                    break
+                seq += os.read(fd, 2 - len(seq))
             return {b"[A": "up", b"[B": "down", b"[C": "right", b"[D": "left"}.get(seq, "esc")
         try:
             return ch.decode()
