@@ -323,6 +323,7 @@ HOST_BIN_SCRIPTS = [
     "fw-guard-postgres.sh",
     "litellm-spend-retention.sh",
     "litellm-watchdog.py",
+    "litellm-incident-agent.sh",
     "open-terminal-restart.sh",
     "owui-signup-approver.py",
     "searxng-quality-check.py",
