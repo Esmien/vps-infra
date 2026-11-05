@@ -6,5 +6,5 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=root
-ExecStart=/usr/bin/python3 /root/.hermes/tasks/digest.py digest
+ExecStart=/usr/bin/python3 /usr/local/bin/task-board-digest.py digest
 Nice=10

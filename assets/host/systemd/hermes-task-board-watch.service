@@ -1,7 +1,7 @@
 [Unit]
-Description=Owner task board watcher (auto Telegram event on backlog.md change)
+Description=Owner task board watcher (edits the live Telegram board when backlog.md changes)
 
 [Service]
 Type=oneshot
 User=root
-ExecStart=/usr/bin/python3 /root/.hermes/tasks/watchdog.py
+ExecStart=/usr/bin/python3 /usr/local/bin/task-board-watch.py

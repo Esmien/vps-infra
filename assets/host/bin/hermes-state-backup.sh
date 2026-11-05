@@ -124,15 +124,11 @@ rsync -a --delete --exclude '__pycache__/' \
 mkdir -p "$REPO_DIR/hermes/cron"
 [[ -f "$HERMES_HOME/cron/jobs.json" ]] && install -m 600 -D "$HERMES_HOME/cron/jobs.json" "$REPO_DIR/hermes/cron/jobs.json"
 
-# owner task board (backlog + digest script); the bot token in .env stays out of git
-if [[ -d "$HERMES_HOME/tasks" ]]; then
-    rsync -a --delete --exclude '.env' --exclude '__pycache__/' \
-        "$HERMES_HOME/tasks/" "$REPO_DIR/hermes/tasks/"
-fi
-
-# harness-owned systemd units (task board digest/watch); installed by tasks/install-units.sh
-if [[ -d "$HERMES_HOME/units" ]]; then
-    rsync -a --delete "$HERMES_HOME/units/" "$REPO_DIR/hermes/units/"
+# owner task board — ONLY the board document lives in the harness (descriptions/doc).
+# The sender, the watcher, their units and the bot token belong to infra (vps-infra).
+if [[ -f "$HERMES_HOME/tasks/backlog.md" ]]; then
+    mkdir -p "$REPO_DIR/hermes/tasks"
+    install -m 600 "$HERMES_HOME/tasks/backlog.md" "$REPO_DIR/hermes/tasks/backlog.md"
 fi
 
 # host-side runbooks / ops scripts
