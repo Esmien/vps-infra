@@ -59,6 +59,11 @@ def env_path(name: str, default: str) -> Path:
     return Path(os.environ.get(name, default)).expanduser()
 
 
+# Куда отвечать на команду, пришедшую из темы супергруппы: (chat_id, thread_id).
+# Заполняется на время обработки одного апдейта в run_bot(); пусто — поведение как раньше.
+_REPLY_TARGET: tuple[str, str] | None = None
+
+
 def target_for(token: str | None, chat_id: str | None) -> tuple[str, str | None]:
     """Куда слать: личный чат владельца или тема в супергруппе.
 
@@ -86,6 +91,8 @@ def send_telegram(
     if not token or not chat_id:
         raise MonitorError("В .env должны быть заданы BOT_TOKEN и BOT_OWNER (Telegram chat ID).")
     chat_id, thread_id = target_for(token, chat_id)
+    if thread_id is None and _REPLY_TARGET and chat_id == _REPLY_TARGET[0]:
+        thread_id = _REPLY_TARGET[1]
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = {"chat_id": chat_id, "text": text}
@@ -1865,9 +1872,15 @@ def run_bot() -> None:
                 text = (message.get("text") or "").strip()
                 if not chat_id or not text:
                     continue
-                if chat_id != owner:
-                    print(f"bot: команда от {chat_id} отклонена (не владелец).", flush=True)
+                # Авторизация по отправителю, а не по чату: владелец может писать и в личку,
+                # и в тему супергруппы, где chat_id — отрицательный id группы.
+                sender = str((message.get("from") or {}).get("id", "")).strip()
+                if sender != owner:
+                    print(f"bot: команда от {sender or chat_id} отклонена (не владелец).", flush=True)
                     continue
+                global _REPLY_TARGET
+                thread = message.get("message_thread_id")
+                _REPLY_TARGET = (chat_id, str(thread)) if thread else None
                 try:
                     handle_bot_message(chat_id, text)
                 except MonitorError as exc:
@@ -1876,6 +1889,8 @@ def run_bot() -> None:
                         send_telegram(f"⚠️ Ошибка: {exc}", parse_mode=None, chat_id=chat_id)
                     except MonitorError:
                         pass
+                finally:
+                    _REPLY_TARGET = None
             try:
                 write_state(state_path, {"offset": offset})
             except OSError as exc:
