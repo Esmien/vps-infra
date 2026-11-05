@@ -6,6 +6,7 @@
   доска (документ):  /root/.hermes/tasks/backlog.md
   этот скрипт:       /usr/local/bin/task-board-digest.py (источник — vps-infra/assets/host/bin)
   токен бота:        /etc/vps-infra/task-board.env (600, в офсайт-архиве секретов)
+                     OWNER_CHAT_ID + TASK_THREAD_ID = тема «ToDo» в супергруппе Hermes
   указатель сообщения: /var/lib/hermes-task-board/message.json
 
 Правило работы: правка задачи — это РЕДАКТИРОВАНИЕ живого сообщения. Новое сообщение
