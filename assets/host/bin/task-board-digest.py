@@ -42,7 +42,8 @@ ALIASES = {"pending": "todo", "blocked": "declined", "broken": "declined", "reje
 REEDIT_ERRORS = ("message to edit not found", "message can't be edited", "message_id_invalid")
 
 
-def load_env() -> tuple[str, str]:
+def load_env() -> tuple[str, str, str]:
+    """(токен, chat_id, thread_id). TASK_THREAD_ID — тема супергруппы; пусто = личка."""
     values: dict[str, str] = {}
     for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -50,7 +51,7 @@ def load_env() -> tuple[str, str]:
             continue
         key, _, val = line.partition("=")
         values[key.strip()] = val.strip().strip('"').strip("'")
-    return values["TASK_BOT_TOKEN"], values.get("OWNER_CHAT_ID", "")
+    return values["TASK_BOT_TOKEN"], values.get("OWNER_CHAT_ID", ""), values.get("TASK_THREAD_ID", "").strip()
 
 
 def parse_backlog() -> list[dict]:
@@ -98,7 +99,7 @@ def build_digest(tasks: list[dict]) -> str:
 
 
 def api(method: str, **params) -> dict:
-    token, _ = load_env()
+    token, _, _ = load_env()
     body = urllib.parse.urlencode(params).encode()
     req = urllib.request.Request(f"https://api.telegram.org/bot{token}/{method}", data=body)
     try:
@@ -124,11 +125,12 @@ def write_pointer(chat_id: str, message_id: int) -> None:
 
 
 def send_new(text: str) -> dict:
-    _, chat_id = load_env()
+    _, chat_id, thread_id = load_env()
     if not chat_id:
         raise SystemExit("OWNER_CHAT_ID не задан в /etc/vps-infra/task-board.env")
+    extra = {"message_thread_id": thread_id} if thread_id else {}
     payload = api("sendMessage", chat_id=chat_id, text=text,
-                  parse_mode="HTML", disable_web_page_preview="true")
+                  parse_mode="HTML", disable_web_page_preview="true", **extra)
     message_id = payload.get("result", {}).get("message_id")
     if payload.get("ok") and message_id:
         write_pointer(chat_id, message_id)
@@ -139,7 +141,9 @@ def update_board() -> dict:
     """Правит живое сообщение; если править нечего — отправляет новое и запоминает его."""
     text = build_digest(parse_backlog())
     pointer = read_pointer()
-    if not pointer:
+    _, chat_id, _ = load_env()
+    if not pointer or str(pointer.get("chat_id")) != str(chat_id):
+        # доска переехала в другую тему/чат — старый указатель больше не наш
         return send_new(text)
     payload = api("editMessageText", chat_id=pointer["chat_id"], message_id=pointer["message_id"],
                   text=text, parse_mode="HTML", disable_web_page_preview="true")
