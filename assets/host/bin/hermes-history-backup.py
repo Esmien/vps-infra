@@ -143,7 +143,8 @@ def main() -> int:
 
     if errors:
         monitor.send_telegram(
-            "🔴 <b>Бэкап истории Hermes неполный</b>\n" + "\n".join(errors[:5]), parse_mode="HTML"
+            "🔴 <b>Бэкап истории Hermes неполный</b>\n" + "\n".join(errors[:5]),
+            parse_mode="HTML", token=token, chat_id=chat_id,
         )
         return 1
 

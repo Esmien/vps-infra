@@ -104,7 +104,7 @@ def main() -> int:
 
     if errors:
         text = "🔴 <b>Бэкап файлов WebUI неполный</b>\n" + "\n".join(errors[:5])
-        monitor.send_telegram(text, parse_mode="HTML")
+        monitor.send_telegram(text, parse_mode="HTML", token=token, chat_id=chat_id)
         return 1
 
     digest = monitor.sha256_of(archive)
@@ -125,6 +125,8 @@ def main() -> int:
         f"{monitor.format_size(archive.stat().st_size)} · {len(sent)} частей · sha256 ok\n"
         f"Скачать обратно: install.py --from-bot",
         parse_mode="HTML",
+        token=token,
+        chat_id=chat_id,
     )
     prune_archives()
     log("done")

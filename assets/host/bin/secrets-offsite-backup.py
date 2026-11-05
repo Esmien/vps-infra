@@ -203,6 +203,8 @@ def main() -> int:
             "Это единственная копия, которая не лежит на сервере. Без неё расшифровать "
             "архив из файл-бота нельзя.",
             parse_mode="HTML",
+            token=token,
+            chat_id=chat_id,
         )
         KEY_SENT_FLAG.write_text(datetime.now(timezone.utc).isoformat() + "\n")
         os.chmod(KEY_SENT_FLAG, 0o600)
