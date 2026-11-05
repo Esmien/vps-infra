@@ -113,7 +113,7 @@ rsync -a --delete \
     --exclude '__pycache__/' \
     "$HERMES_HOME/skills/" "$REPO_DIR/hermes/skills/"
 
-rsync -a --delete "$HERMES_HOME/plugins/" "$REPO_DIR/hermes/plugins/"
+rsync -a --delete --exclude "__pycache__/" "$HERMES_HOME/plugins/" "$REPO_DIR/hermes/plugins/"
 rsync -a --delete "$HERMES_HOME/hooks/"   "$REPO_DIR/hermes/hooks/"
 # agent-hooks — предохранители вызовов инструментов (ssh-only-gate и пр.);
 # без них fail_closed-хук на восстановленной машине блокирует все инструменты.

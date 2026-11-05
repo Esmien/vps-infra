@@ -304,7 +304,6 @@ CORE_TIMERS = [
     "webui-generated-images-retention.timer",
     "hermes-history-backup.timer",
     "secrets-offsite-backup.timer",
-    "hermes-task-digest.timer",
 ]
 CORE_SERVICES = ["fw-guard-postgres.service"]
 NOTIFY_SERVICES = [
@@ -3066,7 +3065,8 @@ WantedBy=timers.target
             self.install_units(["hermes-boot-notify.service"], ["hermes-boot-notify.service"])
         if self.env.get("GITHUB_KEY"):
             self.install_units(HERMES_UNITS, ["hermes-boot-notify.service", "hermes-state-watch.service",
-                                              "hermes-state-backup.timer"])
+                                              "hermes-state-backup.timer", "hermes-task-digest.timer",
+                                              "hermes-task-board-watch.path"])
             ok("обвязка Hermes включена (boot-notify, state backup)")
         else:
             info("GITHUB_KEY не задан — бэкап состояния Hermes не настроен")
