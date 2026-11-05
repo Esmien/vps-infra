@@ -310,6 +310,7 @@ NOTIFY_SERVICES = [
     "server-monitor-bot.service",
     "server-monitor-events.service",
     "owui-signup-approver.service",
+    "turnstile-gate.service",
 ]
 HERMES_UNITS = [
     "hermes-boot-notify.service",
@@ -332,6 +333,7 @@ HOST_BIN_SCRIPTS = [
     "litellm-incident-agent.sh",
     "open-terminal-restart.sh",
     "owui-signup-approver.py",
+    "turnstile-gate.py",
     "searxng-quality-check.py",
     "webui-compact-images.sh",
     "webui-data-backup.py",
