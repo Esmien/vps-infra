@@ -784,9 +784,29 @@ def parse_dump_timestamp(filename: str) -> datetime | None:
         return None
 
 
+DUMP_KEY_FILE = Path(os.environ.get("DUMP_CRYPTO_KEY", "/etc/backup-crypto.key"))
+DUMP_CRYPTO_ITER = 300000
+
+
+def decrypt_dump(src: Path, dst: Path) -> Path:
+    """Расшифровать дамп в dst (AES-256-CBC/PBKDF2, тот же ключ, что у офсайт-копии)."""
+    proc = subprocess.run(
+        [
+            "openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", str(DUMP_CRYPTO_ITER),
+            "-salt", "-in", str(src), "-out", str(dst), "-pass", f"file:{DUMP_KEY_FILE}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise MonitorError(f"не удалось расшифровать {src.name}: {proc.stderr.strip()[:200]}")
+    os.chmod(dst, 0o600)
+    return dst
+
+
 def db_name_from_file(path: Path) -> str:
-    """webui_db_20261011_063001.dump -> webui_db"""
-    match = re.match(r"^(?P<db>.+?)_\d{8}_\d{6}\.dump$", path.name)
+    """webui_db_20261011_063001.dump(.enc) -> webui_db"""
+    match = re.match(r"^(?P<db>.+?)_\d{8}_\d{6}\.dump(\.enc)?$", path.name)
     return match.group("db") if match else path.stem
 
 
@@ -857,6 +877,14 @@ def build_split_instruction(
         f"<b>Как собрать</b> ({plural_ru(len(part_sizes), 'часть', 'обе части', 'все части')} в одной папке):",
         f"<code>cat {names} &gt; {html.escape(latest.name)}</code>",
     ]
+    if latest.name.endswith(".enc"):
+        plain_name = html.escape(latest.name[: -len(".enc")])
+        lines += [
+            "",
+            "<b>Файл зашифрован</b> (AES-256-CBC, ключ offsite.key). Расшифровка после склейки:",
+            f"<code>openssl enc -d -aes-256-cbc -pbkdf2 -iter 300000 -salt "
+            f"-in {html.escape(latest.name)} -out {plain_name} -pass file:offsite.key</code>",
+        ]
     if failed:
         lines += [
             "",
@@ -1022,11 +1050,9 @@ def collect_backup_groups() -> tuple[dict[str, list[Path]], list[str], list[Path
     """Group backup dumps by database (newest first). Returns (groups, order, files)."""
     backup_dir = env_path("BACKUP_DIR", "/var/backups").resolve()
     pattern = os.environ.get("BACKUP_PATTERN", "*.dump")
-    files = sorted(
-        (path for path in backup_dir.glob(pattern) if path.is_file()),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
+    patterns = [pattern] + ([pattern + ".enc"] if pattern.endswith(".dump") else [])
+    candidates = {path for pat in patterns for path in backup_dir.glob(pat) if path.is_file()}
+    files = sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
     if not files:
         raise MonitorError(f"Не найдены бэкапы в {backup_dir} по шаблону {pattern!r}.")
 
@@ -1160,11 +1186,6 @@ def _restore_into_temp_db(db_name: str, dump: Path) -> tuple[bool, str]:
     byte stream that arrives in Telegram. The throwaway DB is always dropped.
     """
     temp_db = _verify_temp_db_name(db_name)
-    # Проверяем ровно тот байтовый поток, который получатель склеит из частей в Telegram:
-    # любой дамп больше лимита уходит частями, значит и здесь его надо резать так же.
-    split = dump.stat().st_size > TG_DOC_LIMIT
-    # Same count the recipient's split produces, so the verified byte stream matches Telegram.
-    parts_count = split_part_count(dump.stat().st_size) if split else 1
     started = time.monotonic()
     try:
         _pg_as_postgres(["dropdb", "--if-exists", temp_db], check=True, capture_output=True, text=True)
@@ -1174,6 +1195,14 @@ def _restore_into_temp_db(db_name: str, dump: Path) -> tuple[bool, str]:
 
     try:
         with tempfile.TemporaryDirectory(prefix="verify_restore_") as workdir:
+            # Дампы лежат на диске зашифрованными: проверяем ровно тот .dump, который
+            # получится у владельца после decrypt.
+            if dump.name.endswith(".enc"):
+                dump = decrypt_dump(dump, Path(workdir) / dump.name[: -len(".enc")])
+            # Проверяем ровно тот байтовый поток, который получатель склеит из частей:
+            # любой дамп больше лимита уходит частями, значит и здесь его надо резать так же.
+            split = dump.stat().st_size > TG_DOC_LIMIT
+            parts_count = split_part_count(dump.stat().st_size) if split else 1
             if split:
                 parts = split_into(dump, Path(workdir), parts_count)
                 with tempfile.TemporaryFile() as errfile:

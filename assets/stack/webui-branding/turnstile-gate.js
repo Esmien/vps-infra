@@ -55,17 +55,49 @@
     return origSend.apply(this, arguments);
   };
 
+  // Где вообще живёт форма регистрации. Голого input[autocomplete=new-password]
+  // НЕ достаточно: та же разметка есть на Settings → Account (смена пароля),
+  // и виджет раньше всплывал там как посторонний артефакт.
+  function isSignupContext() {
+    var path = (location.pathname || '').replace(/\/+$/, '');
+    if (path.indexOf('/settings') === 0 || path.indexOf('/workspace') === 0) return false;
+    return path === '' || path === '/auth';
+  }
+
   function signupForm() {
-    // Форма регистрации = форма с полем нового пароля.
+    if (!isSignupContext()) return null;
     var pwd = document.querySelector('input[autocomplete="new-password"]');
     if (!pwd) return null;
-    return pwd.closest('form') || pwd.parentElement;
+    var form = pwd.closest('form') || pwd.parentElement;
+    if (!form) return null;
+    // На смене пароля рядом лежит поле текущего пароля — это не регистрация.
+    if (form.querySelector('input[autocomplete="current-password"]')) return null;
+    // У регистрации есть email, у смены пароля его нет.
+    if (!form.querySelector('input[type="email"], input[autocomplete="email"]')) return null;
+    return form;
+  }
+
+  function removeWidget() {
+    if (widget !== null && window.turnstile) {
+      try { window.turnstile.remove(widget); } catch (e) {}
+    }
+    widget = null;
+    token = null;
+    if (container) {
+      if (container.parentElement) container.parentElement.removeChild(container);
+      container = null;
+    }
   }
 
   function injectWidget() {
-    if (!cfg.enabled || !window.turnstile || widget !== null) return;
+    if (!cfg.enabled || !window.turnstile) return;
     var form = signupForm();
-    if (!form) return;
+    if (!form) {
+      // Ушли с формы регистрации (или открыли смену пароля) — виджет убираем.
+      if (widget !== null || container) removeWidget();
+      return;
+    }
+    if (widget !== null) return;
     var submit = form.querySelector('button[type="submit"]') ||
       Array.prototype.slice.call(form.querySelectorAll('button')).pop();
     if (!submit || !submit.parentElement) return;

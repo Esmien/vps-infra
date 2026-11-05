@@ -71,7 +71,7 @@ COPY --from=assets /branding/out/ /app/build/static/
 # 3) Turnstile-гейт регистрации: JS-файл + тег в index.html. Скрипт сам решает,
 #    показывать виджет или нет (если ключи не заданы — молчит).
 COPY turnstile-gate.js /app/build/static/turnstile-gate.js
-RUN sed -i 's|<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />|&\n\t\t<script src="/static/turnstile-gate.js" defer crossorigin="use-credentials"></script>|' /app/build/index.html \
+RUN sed -i 's|<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />|&\n\t\t<script src="/static/turnstile-gate.js?v=2" defer crossorigin="use-credentials"></script>|' /app/build/index.html \
  && grep -q "turnstile-gate.js" /app/build/index.html
 
 LABEL org.opencontainers.image.title="Esmien AI (derived from Open WebUI)" \

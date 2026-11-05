@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Шифрование/расшифровка дампов БД.
+
+Схема намеренно та же, что у офсайт-копии секретов (openssl enc, AES-256-CBC,
+PBKDF2 300000 итераций, соль), поэтому в контуре одна процедура восстановления
+и один ключ — его копия лежит в /etc/backup-crypto.key (читает только root и
+ai_service, под которым работают таймеры бэкапа и уведомлений).
+
+    dump-crypto encrypt <file.dump>          # -> <file.dump>.enc, исходник удаляется
+    dump-crypto decrypt <file.dump.enc> <out> # -> <out>
+
+Расшифровка вручную (без этого скрипта):
+
+    openssl enc -d -aes-256-cbc -pbkdf2 -iter 300000 -salt \
+        -in webui_db_20261105_023000.dump.enc -out webui_db.dump \
+        -pass file:/etc/backup-crypto.key
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+KEY_FILE = Path(os.environ.get("DUMP_CRYPTO_KEY", "/etc/backup-crypto.key"))
+PBKDF2_ITER = 300000
+
+
+def _openssl(src: Path, dst: Path, decrypting: bool = False) -> None:
+    if not KEY_FILE.is_file():
+        raise SystemExit(f"нет ключа {KEY_FILE}")
+    argv = ["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-iter", str(PBKDF2_ITER),
+            "-salt", "-in", str(src), "-out", str(dst), "-pass", f"file:{KEY_FILE}"]
+    if decrypting:
+        argv.insert(2, "-d")
+    proc = subprocess.run(argv, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise SystemExit(f"openssl failed: {proc.stderr.strip()[:300]}")
+
+
+def encrypt(src: Path, keep_plain: bool = False) -> Path:
+    """Зашифровать src -> src.enc атомарно; по умолчанию открытый файл удаляется."""
+    dst = src.with_name(src.name + ".enc")
+    tmp = dst.with_name(dst.name + ".tmp")
+    _openssl(src, tmp)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, dst)
+    if not keep_plain:
+        src.unlink(missing_ok=True)
+    return dst
+
+
+def decrypt(src: Path, dst: Path) -> Path:
+    """Расшифровать src -> dst (dst создаётся с правами 600)."""
+    _openssl(src, dst, decrypting=True)
+    os.chmod(dst, 0o600)
+    return dst
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Шифрование дампов БД")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_enc = sub.add_parser("encrypt", help="зашифровать файл, открытый удалить")
+    p_enc.add_argument("path")
+    p_enc.add_argument("--keep-plain", action="store_true", help="не удалять исходник")
+
+    p_dec = sub.add_parser("decrypt", help="расшифровать файл в указанный путь")
+    p_dec.add_argument("path")
+    p_dec.add_argument("out")
+
+    args = parser.parse_args()
+    if args.cmd == "encrypt":
+        src = Path(args.path)
+        if not src.is_file():
+            raise SystemExit(f"нет файла {src}")
+        info = encrypt(src, keep_plain=args.keep_plain)
+        print(info)
+    else:
+        src, out = Path(args.path), Path(args.out)
+        if not src.is_file():
+            raise SystemExit(f"нет файла {src}")
+        info = decrypt(src, out)
+        print(info)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
