@@ -804,6 +804,13 @@ def decrypt_dump(src: Path, dst: Path) -> Path:
     return dst
 
 
+def backup_glob_patterns(pattern: str) -> list[str]:
+    """Шаблоны поиска дампов: открытые (.dump) и зашифрованные (.dump.enc)."""
+    if pattern.endswith(".dump"):
+        return [pattern, pattern + ".enc"]
+    return [pattern]
+
+
 def db_name_from_file(path: Path) -> str:
     """webui_db_20261011_063001.dump(.enc) -> webui_db"""
     match = re.match(r"^(?P<db>.+?)_\d{8}_\d{6}\.dump(\.enc)?$", path.name)
@@ -1050,8 +1057,7 @@ def collect_backup_groups() -> tuple[dict[str, list[Path]], list[str], list[Path
     """Group backup dumps by database (newest first). Returns (groups, order, files)."""
     backup_dir = env_path("BACKUP_DIR", "/var/backups").resolve()
     pattern = os.environ.get("BACKUP_PATTERN", "*.dump")
-    patterns = [pattern] + ([pattern + ".enc"] if pattern.endswith(".dump") else [])
-    candidates = {path for pat in patterns for path in backup_dir.glob(pat) if path.is_file()}
+    candidates = {path for pat in backup_glob_patterns(pattern) for path in backup_dir.glob(pat) if path.is_file()}
     files = sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
     if not files:
         raise MonitorError(f"Не найдены бэкапы в {backup_dir} по шаблону {pattern!r}.")
@@ -1424,7 +1430,14 @@ def check_alerts() -> None:
         raise MonitorError("MAX_BACKUP_AGE_HOURS должен быть положительным числом.")
 
     try:
-        backup_files = [path for path in backup_dir.glob(pattern) if path.is_file()]
+        # Дампы лежат на диске зашифрованными (*.dump.enc) — шаблон из .env их не видит,
+        # поэтому ищем оба варианта, иначе алерт «файлы бэкапа не найдены» врёт.
+        backup_files = [
+            path
+            for pat in backup_glob_patterns(pattern)
+            for path in backup_dir.glob(pat)
+            if path.is_file()
+        ]
         newest_backup = max(backup_files, key=lambda path: path.stat().st_mtime) if backup_files else None
     except OSError as exc:
         raise MonitorError(f"Не удалось проверить бэкапы в {backup_dir}: {exc}") from exc
@@ -1729,7 +1742,12 @@ def verify_backup() -> None:
         lines.append("<b>Журнал бэкапа:</b> ❌ не найден")
 
     files = sorted(
-        (path for path in backup_dir.glob(pattern) if path.is_file()),
+        (
+            path
+            for pat in backup_glob_patterns(pattern)
+            for path in backup_dir.glob(pat)
+            if path.is_file()
+        ),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
