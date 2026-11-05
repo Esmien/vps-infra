@@ -31,7 +31,7 @@ log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" | tee -a "$LOG"; }
 notify_fail() {
     local msg=$1
     if command -v hermes >/dev/null 2>&1; then
-        timeout 90 hermes send -t "${TG_TARGET:-telegram:-1004410657647:2}" "❌ vps-infra: $msg" >/dev/null 2>&1 && return 0
+        timeout 90 hermes send -t "${TG_TARGET:-telegram:-1004410657647:11}" "❌ vps-infra: $msg" >/dev/null 2>&1 && return 0
     fi
     local env=/home/ai_service/notifications/.env token chat thread
     [[ -r "$env" ]] || return 0
