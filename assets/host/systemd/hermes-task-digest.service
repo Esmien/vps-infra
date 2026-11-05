@@ -1,0 +1,10 @@
+[Unit]
+Description=Owner task digest (weekly Telegram brief from ~/.hermes/tasks/backlog.md)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /root/.hermes/tasks/digest.py digest
+Nice=10

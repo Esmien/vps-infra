@@ -124,6 +124,12 @@ rsync -a --delete --exclude '__pycache__/' \
 mkdir -p "$REPO_DIR/hermes/cron"
 [[ -f "$HERMES_HOME/cron/jobs.json" ]] && install -m 600 -D "$HERMES_HOME/cron/jobs.json" "$REPO_DIR/hermes/cron/jobs.json"
 
+# owner task board (backlog + digest script); the bot token in .env stays out of git
+if [[ -d "$HERMES_HOME/tasks" ]]; then
+    rsync -a --delete --exclude '.env' --exclude '__pycache__/' \
+        "$HERMES_HOME/tasks/" "$REPO_DIR/hermes/tasks/"
+fi
+
 # host-side runbooks / ops scripts
 HOST_BIN=(
     docker-incident-detector.py

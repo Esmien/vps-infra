@@ -40,6 +40,7 @@ SOURCE_PATTERNS = (
     "/home/ai_service/ai-stack/ai/.env",
     "/home/ai_service/notifications/.env",
     "/root/.hermes/.env",
+    "/root/.hermes/tasks/.env",
     "/home/ai_service/ai-stack/ai/*/.env",
 )
 WORK = Path("/var/lib/secrets-offsite")

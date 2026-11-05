@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly owner task digest (Mon 08:30 MSK / 05:30 UTC)
+
+[Timer]
+OnCalendar=Mon *-*-* 05:30:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=hermes-task-digest.service
+
+[Install]
+WantedBy=timers.target
