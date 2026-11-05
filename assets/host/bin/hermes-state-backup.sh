@@ -126,9 +126,9 @@ mkdir -p "$REPO_DIR/hermes/cron"
 
 # owner task board — ONLY the board document lives in the harness (descriptions/doc).
 # The sender, the watcher, their units and the bot token belong to infra (vps-infra).
-if [[ -f "$HERMES_HOME/tasks/backlog.md" ]]; then
-    mkdir -p "$REPO_DIR/hermes/tasks"
-    install -m 600 "$HERMES_HOME/tasks/backlog.md" "$REPO_DIR/hermes/tasks/backlog.md"
+if [[ -d "$HERMES_HOME/tasks" ]]; then
+    rsync -a --delete --exclude ".env" --exclude "__pycache__/" \
+        "$HERMES_HOME/tasks/" "$REPO_DIR/hermes/tasks/"
 fi
 
 # host-side runbooks / ops scripts
