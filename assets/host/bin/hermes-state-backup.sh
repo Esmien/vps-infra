@@ -130,6 +130,11 @@ if [[ -d "$HERMES_HOME/tasks" ]]; then
         "$HERMES_HOME/tasks/" "$REPO_DIR/hermes/tasks/"
 fi
 
+# harness-owned systemd units (task board digest/watch); installed by tasks/install-units.sh
+if [[ -d "$HERMES_HOME/units" ]]; then
+    rsync -a --delete "$HERMES_HOME/units/" "$REPO_DIR/hermes/units/"
+fi
+
 # host-side runbooks / ops scripts
 HOST_BIN=(
     docker-incident-detector.py
