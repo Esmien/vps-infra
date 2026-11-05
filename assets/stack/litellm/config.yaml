@@ -11,6 +11,11 @@ litellm_settings:
   drop_params: true
 
 general_settings:
+  # Вход в админку больше не идёт по статической паре из .env (UI_USERNAME/UI_PASSWORD)
+  # и не принимает мастер-ключ на форме логина. Админ — обычный юзер в БД со своим
+  # паролем (black.walf16@gmail.com / alias esmien). Откат: убрать флаг + restart.
+  # Мастер-ключ по-прежнему работает как Bearer для API — это и есть break-glass.
+  disable_env_credential_login: true
   forward_client_headers_to_llm_api: true
   # Кто стоит перед LiteLLM: только локальный nginx (127.0.0.1:4000 -> docker-proxy).
   # Нужно, чтобы login-throttle считал лимиты по РЕАЛЬНОМУ IP клиента из X-Forwarded-For,
