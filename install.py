@@ -334,6 +334,7 @@ HOST_BIN_SCRIPTS = [
     "open-terminal-restart.sh",
     "owui-signup-approver.py",
     "turnstile-gate.py",
+    "dump-crypto",
     "searxng-quality-check.py",
     "webui-compact-images.sh",
     "webui-data-backup.py",
@@ -3213,10 +3214,24 @@ WantedBy=timers.target
                 copied += 1
 
         ai_src = src / "host" / "ai-stack"
+        if not (ai_src / "backup-databases.sh").is_file() and (src / "stack" / "backup-databases.sh").is_file():
+            ai_src = src / "stack"
         if (ai_src / "backup-databases.sh").is_file():
             self.copy_file(ai_src / "backup-databases.sh",
                            dst(AI_HOME / "ai-stack" / "ai" / "backup-databases.sh"), 0o755, AI_USER)
             copied += 1
+
+        # Ключ шифрования дампов: копия офсайт-ключа, читаемая ai_service (таймеры
+        # бэкапа и отправки работают под этим пользователем, /root ему недоступен).
+        offsite_key = Path("/root/.secrets/offsite.key")
+        if offsite_key.is_file():
+            crypto_key = dst(Path("/etc/backup-crypto.key"))
+            self.copy_file(offsite_key, crypto_key, 0o440, "root")
+            self.run(["chown", "root:ai_service", str(crypto_key)], check=False)
+            ok("ключ шифрования дампов /etc/backup-crypto.key разложен")
+            copied += 1
+        else:
+            warn("нет /root/.secrets/offsite.key — дампы останутся незашифрованными")
         for runbook in ("runbook-containers.md", "runbook.md"):
             if (ai_src / runbook).is_file():
                 self.copy_file(ai_src / runbook, dst(AI_HOME / "ai-stack" / runbook), 0o644, AI_USER)
