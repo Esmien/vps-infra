@@ -1,0 +1,26 @@
+[Unit]
+Description=Turnstile gate for Open WebUI signup (auth_request backend)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+Environment=TURNSTILE_ENV=/etc/turnstile-gate.env
+Environment=TURNSTILE_PORT=8099
+ExecStart=/usr/bin/python3 /usr/local/bin/turnstile-gate.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
