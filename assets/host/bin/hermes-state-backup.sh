@@ -28,7 +28,8 @@ log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" | tee -a "$LOG_FILE"; }
 
 notify_fail() {
     command -v hermes >/dev/null 2>&1 || return 0
-    timeout 90 hermes send -t telegram "❌ Hermes state backup: $*" >/dev/null 2>&1 || true
+    # только в тему Backups супергруппы (личка владельца больше не используется)
+    timeout 90 hermes send -t "${TG_TARGET:-telegram:-1004410657647:10}" "❌ Hermes state backup: $*" >/dev/null 2>&1 || true
 }
 
 die() { log "ERROR: $*"; notify_fail "$*"; exit 1; }
