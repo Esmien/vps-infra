@@ -1,0 +1,9 @@
+[owui-auth]
+enabled  = true
+port     = http,https
+filter   = nginx-owui-auth
+logpath  = /var/log/nginx/access.log
+maxretry = 10
+findtime = 10m
+bantime  = 1h
+action   = nginx-deny-ip

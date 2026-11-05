@@ -185,6 +185,15 @@ def api(method, path, body=None, token=None, timeout=30):
 
 
 def admin_token(force=False):
+    """Bearer-токен для админских вызовов.
+
+    С включённым MFA парольный signin требует код из TOTP, поэтому сервис
+    ходит по API-ключу админа (OWUI_ADMIN_API_KEY в своём env). Пароль остаётся
+    фоллбэком для инсталляций без ключа.
+    """
+    api_key = CFG.get("OWUI_ADMIN_API_KEY")
+    if api_key:
+        return api_key
     if _api_token["value"] and not force:
         return _api_token["value"]
     status, payload = api(

@@ -42,6 +42,11 @@ SOURCE_PATTERNS = (
     "/root/.hermes/.env",
     "/etc/vps-infra/task-board.env",
     "/home/ai_service/ai-stack/ai/*/.env",
+    # Turnstile-ключи для гейта регистрации (без них гейт выключается, а новый
+    # sitekey/secret надо выпускать в дашборде CF).
+    "/etc/turnstile-gate.env",
+    # Пароль/API-ключ WebUI-админа для аппрувера регистраций.
+    "/root/.config/owui-signup-approver/env",
 )
 WORK = Path("/var/lib/secrets-offsite")
 KEY_DIR = Path("/root/.secrets")
