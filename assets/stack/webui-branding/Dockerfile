@@ -23,8 +23,8 @@
 # Глобальный ARG (объявлен ДО первого FROM, иначе в FROM не виден).
 # Пиннинг по дайджесту: :main — rolling-тег, один и тот же тег со временем
 # указывает на разный код. Дайджест фиксирует конкретную сборку.
-# Текущая база: Open WebUI v0.12.5 (2026-10-29).
-ARG OPENWEBUI_BASE=ghcr.io/open-webui/open-webui@sha256:03443b8de6b617da9d900edd09b4bf1cb0ddbfdcba6afb42c548336a0b821ded
+# Текущая база: Open WebUI v0.13.0 (2026-11-03).
+ARG OPENWEBUI_BASE=ghcr.io/open-webui/open-webui@sha256:2272b0fb7c8783a016bcc179abb467cfa34590c99c5e6560fe0e9155b4820a09
 
 # ── stage 1: генерация всех ассетов брендинга из двух исходников ─────────────
 FROM python:3.12-slim AS assets
@@ -67,6 +67,12 @@ RUN for f in /app/build/_app/immutable/nodes/*.js; do \
 # 2) Ассеты в источник статики. Здесь и favicon/logo (цветной вариант),
 #    и splash.png (светлая тема), и splash-dark.png (тёмная тема).
 COPY --from=assets /branding/out/ /app/build/static/
+
+# 3) Turnstile-гейт регистрации: JS-файл + тег в index.html. Скрипт сам решает,
+#    показывать виджет или нет (если ключи не заданы — молчит).
+COPY turnstile-gate.js /app/build/static/turnstile-gate.js
+RUN sed -i 's|<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />|&\n\t\t<script src="/static/turnstile-gate.js" defer crossorigin="use-credentials"></script>|' /app/build/index.html \
+ && grep -q "turnstile-gate.js" /app/build/index.html
 
 LABEL org.opencontainers.image.title="Esmien AI (derived from Open WebUI)" \
       org.opencontainers.image.description="Open WebUI с кастомным брендингом Esmien AI" \
