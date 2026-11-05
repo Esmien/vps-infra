@@ -31,15 +31,17 @@ log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" | tee -a "$LOG"; }
 notify_fail() {
     local msg=$1
     if command -v hermes >/dev/null 2>&1; then
-        timeout 90 hermes send -t telegram "❌ vps-infra: $msg" >/dev/null 2>&1 && return 0
+        timeout 90 hermes send -t "${TG_TARGET:-telegram:-1004410657647:2}" "❌ vps-infra: $msg" >/dev/null 2>&1 && return 0
     fi
-    local env=/home/ai_service/notifications/.env token owner
+    local env=/home/ai_service/notifications/.env token chat thread
     [[ -r "$env" ]] || return 0
     token=$(grep -m1 '^BOT_TOKEN=' "$env" 2>/dev/null | cut -d= -f2-)
-    owner=$(grep -m1 '^BOT_OWNER=' "$env" 2>/dev/null | cut -d= -f2-)
-    [[ -n "$token" && -n "$owner" ]] || return 0
+    chat=$(grep -m1 '^BOT_TARGET_CHAT=' "$env" 2>/dev/null | cut -d= -f2-)
+    thread=$(grep -m1 '^BOT_TARGET_THREAD=' "$env" 2>/dev/null | cut -d= -f2-)
+    [[ -n "$chat" ]] || chat=$(grep -m1 '^BOT_OWNER=' "$env" 2>/dev/null | cut -d= -f2-)
+    [[ -n "$token" && -n "$chat" ]] || return 0
     curl -sS -m 15 -o /dev/null -X POST "https://api.telegram.org/bot${token}/sendMessage" \
-        -d chat_id="$owner" --data-urlencode "text=❌ vps-infra: $msg" || true
+        -d chat_id="$chat" ${thread:+-d message_thread_id="$thread"} --data-urlencode "text=❌ vps-infra: $msg" || true
 }
 
 die() {
