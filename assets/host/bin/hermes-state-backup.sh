@@ -122,6 +122,12 @@ rsync -a --delete "$HERMES_HOME/agent-hooks/" "$REPO_DIR/hermes/agent-hooks/"
 rsync -a --delete --exclude '__pycache__/' \
     "$HERMES_HOME/scripts/" "$REPO_DIR/hermes/scripts/"
 
+# docs — разборы, замеры и предложения по инфраструктуре.
+# Живут здесь, а не в vps-infra: там только то, что реально стоит на хосте.
+if [[ -d "$HERMES_HOME/docs" ]]; then
+    rsync -a --delete "$HERMES_HOME/docs/" "$REPO_DIR/hermes/docs/"
+fi
+
 mkdir -p "$REPO_DIR/hermes/cron"
 [[ -f "$HERMES_HOME/cron/jobs.json" ]] && install -m 600 -D "$HERMES_HOME/cron/jobs.json" "$REPO_DIR/hermes/cron/jobs.json"
 

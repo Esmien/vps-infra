@@ -25,6 +25,7 @@ WATCH=(
     "$HERMES/plugins"
     "$HERMES/hooks"
     "$HERMES/scripts"
+    "$HERMES/docs"
     "$HERMES/cron/jobs.json"
     "$HERMES/config.yaml"
     "$HERMES/SOUL.md"
