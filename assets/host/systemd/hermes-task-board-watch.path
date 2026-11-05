@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch /root/.hermes/tasks/backlog.md for changes
+
+[Path]
+PathModified=/root/.hermes/tasks/backlog.md
+Unit=hermes-task-board-watch.service
+
+[Install]
+WantedBy=paths.target
