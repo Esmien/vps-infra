@@ -55,10 +55,6 @@ def read_env_file(path):
 CFG = read_env_file(CFG_FILE)
 TG_TOKEN = CFG["TG_TOKEN"]
 TG_OWNER = int(CFG["TG_OWNER"])
-# Куда присылать заявки: тема супергруппы (TG_CHAT_ID + TG_THREAD_ID), иначе личка владельца.
-# Если бота нет в группе, sendMessage упадёт — уходим в личку, чтобы заявка не потерялась.
-TG_CHAT = int(CFG.get("TG_CHAT_ID") or TG_OWNER)
-TG_THREAD = str(CFG.get("TG_THREAD_ID") or "").strip()
 OWUI_BASE = CFG.get("OWUI_BASE", "http://127.0.0.1:8080").rstrip("/")
 PGHOST = CFG.get("PGHOST", "127.0.0.1")
 PGPORT = CFG.get("PGPORT", "5432")
@@ -299,29 +295,17 @@ def scan(state):
     for u in users:
         if u["id"] in state["notified"]:
             continue
-        payload = {
-            "chat_id": TG_CHAT,
-            "text": notify_text(u),
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-            "reply_markup": main_keyboard(u["id"]),
-        }
-        if TG_THREAD:
-            payload["message_thread_id"] = int(TG_THREAD)
         try:
-            res = tg("sendMessage", payload)
+            res = tg("sendMessage", {
+                "chat_id": TG_OWNER,
+                "text": notify_text(u),
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+                "reply_markup": main_keyboard(u["id"]),
+            })
         except TgError as exc:
-            if TG_CHAT == TG_OWNER:
-                log.error("notify %s failed: %s", u["email"], exc)
-                continue
-            log.warning("notify in %s failed (%s) — fallback to owner DM", TG_CHAT, exc)
-            payload.pop("message_thread_id", None)
-            payload["chat_id"] = TG_OWNER
-            try:
-                res = tg("sendMessage", payload)
-            except TgError as exc2:
-                log.error("notify %s failed: %s", u["email"], exc2)
-                continue
+            log.error("notify %s failed: %s", u["email"], exc)
+            continue
         state["notified"][u["id"]] = {
             "message_id": res["result"]["message_id"],
             "email": u["email"],

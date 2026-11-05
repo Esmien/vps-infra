@@ -1875,6 +1875,9 @@ def run_bot() -> None:
                 # Авторизация по отправителю, а не по чату: владелец может писать и в личку,
                 # и в тему супергруппы, где chat_id — отрицательный id группы.
                 sender = str((message.get("from") or {}).get("id", "")).strip()
+                # В группе реагируем только на команды: обычный текст в темах — не для бота.
+                if chat_id.startswith("-") and not text.startswith("/"):
+                    continue
                 if sender != owner:
                     print(f"bot: команда от {sender or chat_id} отклонена (не владелец).", flush=True)
                     continue

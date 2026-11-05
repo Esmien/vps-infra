@@ -100,7 +100,7 @@ Docker: ${docker_line}
 
 Hermes на связи и готов отвечать."
 
-if printf '%s\n' "$MSG" | "$HERMES" send -t "${TG_TARGET:-telegram:-1004410657647:2}" -q >>"$LOG" 2>&1; then
+if printf '%s\n' "$MSG" | "$HERMES" send -t "${TG_TARGET:-telegram:-1004410657647:11}" -q >>"$LOG" 2>&1; then
     log "notification sent | gw=${gw_ok} docker=${docker_ok} up=${up}/${total} down=[${down_list%, }]"
 else
     log "ERROR: hermes send failed (exit $?)"
