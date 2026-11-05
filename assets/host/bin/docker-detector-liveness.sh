@@ -23,8 +23,11 @@ notify() {  # notify <stamp> <log-tag> <message>
     echo "$(date -u +%FT%TZ) LIVENESS-FAIL $tag $msg" >> "$LOG"
     set -a; . "$ENVF" 2>/dev/null; set +a
     if [ -n "${BOT_TOKEN:-}" ] && [ -n "${BOT_OWNER:-}" ]; then
+        target_chat="${BOT_TARGET_CHAT:-$BOT_OWNER}"
+        thread_arg=()
+        [ -n "${BOT_TARGET_THREAD:-}" ] && thread_arg=(-d message_thread_id="${BOT_TARGET_THREAD}")
         curl -sS -m 15 -o /dev/null -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            -d chat_id="${BOT_OWNER}" --data-urlencode "text=$msg" || true
+            -d chat_id="${target_chat}" "${thread_arg[@]}" --data-urlencode "text=$msg" || true
     fi
 }
 

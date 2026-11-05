@@ -94,11 +94,16 @@ def load_env() -> None:
             os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 load_env()
-token, chat = os.environ.get("BOT_TOKEN", ""), os.environ.get("BOT_OWNER", "")
+token = os.environ.get("BOT_TOKEN", "")
+chat = os.environ.get("BOT_TARGET_CHAT") or os.environ.get("BOT_OWNER", "")
+thread = os.environ.get("BOT_TARGET_THREAD", "")
 if token and chat:
+    payload = {"chat_id": chat, "text": body, "parse_mode": "HTML"}
+    if thread:
+        payload["message_thread_id"] = int(thread) if thread.isdigit() else thread
     req = urllib.request.Request(
         f"https://api.telegram.org/bot{token}/sendMessage",
-        data=json.dumps({"chat_id": chat, "text": body, "parse_mode": "HTML"}).encode(),
+        data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=20) as r:

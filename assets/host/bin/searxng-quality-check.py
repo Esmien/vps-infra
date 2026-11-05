@@ -112,13 +112,15 @@ def send(text: str) -> None:
             if line and not line.startswith("#") and "=" in line:
                 key, _, value = line.partition("=")
                 env[key.strip()] = value.strip().strip('"').strip("'")
-        token, owner = env.get("BOT_TOKEN"), env.get("BOT_OWNER")
+        token = env.get("BOT_TOKEN")
+        owner = env.get("BOT_TARGET_CHAT") or env.get("BOT_OWNER")
         if not token or not owner:
             log("SEND failed: BOT_TOKEN/BOT_OWNER не найдены")
             return
-        body = urllib.parse.urlencode(
-            {"chat_id": owner, "text": text, "disable_web_page_preview": "true"}
-        ).encode()
+        fields = {"chat_id": owner, "text": text, "disable_web_page_preview": "true"}
+        if env.get("BOT_TARGET_THREAD"):
+            fields["message_thread_id"] = env["BOT_TARGET_THREAD"]
+        body = urllib.parse.urlencode(fields).encode()
         req = urllib.request.Request(
             f"https://api.telegram.org/bot{token}/sendMessage", data=body
         )

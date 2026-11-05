@@ -59,6 +59,22 @@ def env_path(name: str, default: str) -> Path:
     return Path(os.environ.get(name, default)).expanduser()
 
 
+def target_for(token: str | None, chat_id: str | None) -> tuple[str, str | None]:
+    """Куда слать: личный чат владельца или тема в супергруппе.
+
+    Переопределение включается переменными ``BOT_TARGET_CHAT`` / ``BOT_TARGET_THREAD``
+    (для BOT_TOKEN) и ``FILE_TARGET_CHAT`` / ``FILE_TARGET_THREAD`` (для FILE_BOT_TOKEN).
+    Явный chat_id, отличный от BOT_OWNER, остаётся нетронутым, а без переменных всё
+    работает как раньше — в личку.
+    """
+    scope = "FILE" if token and token == os.environ.get("FILE_BOT_TOKEN") else "BOT"
+    override_chat = (os.environ.get(f"{scope}_TARGET_CHAT") or "").strip()
+    if override_chat and (not chat_id or chat_id == os.environ.get("BOT_OWNER")):
+        thread_id = (os.environ.get(f"{scope}_TARGET_THREAD") or "").strip()
+        return override_chat, (thread_id or None)
+    return chat_id or "", None
+
+
 def send_telegram(
     text: str,
     parse_mode: str | None = "HTML",
@@ -69,9 +85,12 @@ def send_telegram(
     chat_id = chat_id or os.environ.get("BOT_OWNER")
     if not token or not chat_id:
         raise MonitorError("В .env должны быть заданы BOT_TOKEN и BOT_OWNER (Telegram chat ID).")
+    chat_id, thread_id = target_for(token, chat_id)
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = {"chat_id": chat_id, "text": text}
+    if thread_id:
+        data["message_thread_id"] = thread_id
     if parse_mode:
         data["parse_mode"] = parse_mode
     payload = urlencode(data).encode("utf-8")
@@ -97,7 +116,8 @@ def send_telegram(
     # Явный след доставки в журнале юнита: «сообщение ушло» должно быть проверяемым,
     # а не выводиться из exit code.
     sent = (result.get("result") or {}).get("message_id")
-    print(f"monitor: sent message_id={sent} chat={chat_id} chars={len(text)}", flush=True)
+    thread_suffix = f" thread={thread_id}" if thread_id else ""
+    print(f"monitor: sent message_id={sent} chat={chat_id}{thread_suffix} chars={len(text)}", flush=True)
 
 
 def send_long_message(
@@ -860,7 +880,10 @@ def send_document(token: str, chat_id: str, path: Path, caption: str | None = No
             f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode("utf-8")
         )
 
+    chat_id, thread_id = target_for(token, chat_id)
     add_field("chat_id", str(chat_id))
+    if thread_id:
+        add_field("message_thread_id", str(thread_id))
     if caption:
         add_field("caption", caption)
     chunks.append(

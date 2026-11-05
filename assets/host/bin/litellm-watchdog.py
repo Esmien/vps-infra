@@ -91,11 +91,15 @@ def send(text: str, no_send: bool) -> None:
         print(text)
         return
     token = os.environ.get("BOT_TOKEN", "")
-    chat = os.environ.get("BOT_OWNER", "")
+    chat = os.environ.get("BOT_TARGET_CHAT") or os.environ.get("BOT_OWNER", "")
+    thread = os.environ.get("BOT_TARGET_THREAD", "")
     if not token or not chat:
         log("BOT_TOKEN/BOT_OWNER missing — alert not sent")
         return
-    body = json.dumps({"chat_id": chat, "text": text, "parse_mode": "HTML"}).encode()
+    payload = {"chat_id": chat, "text": text, "parse_mode": "HTML"}
+    if thread:
+        payload["message_thread_id"] = int(thread) if thread.isdigit() else thread
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(
         f"https://api.telegram.org/bot{token}/sendMessage",
         data=body,
