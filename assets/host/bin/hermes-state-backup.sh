@@ -99,6 +99,20 @@ mkdir -p "$REPO_DIR"/{hermes,host/bin,host/systemd,host/etc,host/ai-stack,host/b
 install -m 600 -D "$HERMES_HOME/config.yaml" "$REPO_DIR/hermes/config.yaml"
 [[ -f "$HERMES_HOME/SOUL.md" ]] && install -m 600 -D "$HERMES_HOME/SOUL.md" "$REPO_DIR/hermes/SOUL.md"
 
+# Extra profiles (reader и подобные изолированные роли): только config.yaml, SOUL.md и
+# собственные скиллы. Никогда .env (ключи), sessions/, state.db, cache/, logs/ —
+# восстановление профиля = файлы + строка ключа, добавленная вручную.
+if [[ -d "$HERMES_HOME/profiles" ]]; then
+    rsync -a --delete --delete-excluded --prune-empty-dirs \
+        --include '*/' --include 'config.yaml' --include 'SOUL.md' \
+        --exclude '*' \
+        "$HERMES_HOME/profiles/" "$REPO_DIR/hermes/profiles/"
+fi
+
+# Хелперы, которые агент вызывает сам (read-untrusted и пр.)
+[[ -d "$HERMES_HOME/bin" ]] && rsync -a --delete --exclude '*.lock' \
+    "$HERMES_HOME/bin/" "$REPO_DIR/hermes/bin/"
+
 rsync -a --delete --exclude '*.lock' \
     "$HERMES_HOME/memories/" "$REPO_DIR/hermes/memories/"
 
