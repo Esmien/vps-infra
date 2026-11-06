@@ -1,0 +1,19 @@
+[Unit]
+Description=SIWC gateway: Sign in with ChatGPT (OSS) -> api.openai.com/v1/responses bridge
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /root/siwc/gateway.py
+Environment=SIWC_AUTH_FILE=/root/siwc/auth.json
+Environment=SIWC_BIND=172.17.0.1,127.0.0.1
+Environment=SIWC_PORT=4010
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=0
+StandardOutput=append:/root/siwc/gateway.log
+StandardError=append:/root/siwc/gateway.log
+
+[Install]
+WantedBy=multi-user.target

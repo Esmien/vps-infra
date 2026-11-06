@@ -1,0 +1,483 @@
+#!/usr/bin/env python3
+"""SIWC gateway: OpenAI-compatible bridge to the documented
+Sign in with ChatGPT (OSS) flow -> https://api.openai.com/v1/responses.
+
+Why: keeps the official route (no backend-api, no Codex impersonation) while
+giving LiteLLM / Open WebUI / Hermes a plain /v1/chat/completions endpoint.
+
+Endpoints:
+  GET  /v1/models
+  POST /v1/responses          (passthrough, store=false forced, stream bridged)
+  POST /v1/chat/completions   (translated, stream + non-stream)
+  GET  /healthz
+
+Creds: AUTH_FILE (default /root/siwc/auth.json), refreshed in place, 0600.
+Nothing secret is ever logged.
+"""
+import http.client
+import json
+import os
+import socket
+import sys
+import threading
+import time
+import urllib.parse
+import urllib.request
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+API_HOST = 'api.openai.com'
+TOKEN_URL = 'https://auth.openai.com/api/accounts/oauth/token'
+RESOURCE = 'https://api.openai.com/v1'
+AUTH_FILE = os.environ.get('SIWC_AUTH_FILE', '/root/siwc/auth.json')
+PORT = int(os.environ.get('SIWC_PORT', '4010'))
+BIND = [b for b in os.environ.get('SIWC_BIND', '172.17.0.1,127.0.0.1').split(',') if b]
+TIMEOUT = int(os.environ.get('SIWC_TIMEOUT', '600'))
+
+LOCK = threading.Lock()
+
+
+def log(*a):
+    print(time.strftime('%H:%M:%S'), *a, file=sys.stderr, flush=True)
+
+
+def load_creds():
+    with open(AUTH_FILE) as fh:
+        return json.load(fh)
+
+
+def save_creds(c):
+    tmp = AUTH_FILE + '.tmp'
+    with open(tmp, 'w') as fh:
+        json.dump(c, fh)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, AUTH_FILE)
+
+
+def refresh(creds):
+    form = urllib.parse.urlencode({
+        'grant_type': 'refresh_token',
+        'refresh_token': creds['refresh_token'],
+        'client_id': creds['client_id'],
+        'resource': RESOURCE,
+    }).encode()
+    req = urllib.request.Request(TOKEN_URL, form, {
+        'Content-Type': 'application/x-www-form-urlencoded'})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        tok = json.load(resp)
+    creds = dict(creds)
+    creds.update({
+        'access_token': tok['access_token'],
+        'refresh_token': tok.get('refresh_token', creds['refresh_token']),
+        'id_token': tok.get('id_token', creds.get('id_token')),
+        'expires_in': tok.get('expires_in'),
+        'saved_at': int(time.time()),
+    })
+    save_creds(creds)
+    log('token refreshed')
+    return creds
+
+
+def access_token(force=False):
+    with LOCK:
+        creds = load_creds()
+        expired = int(creds.get('saved_at', 0)) + int(creds.get('expires_in') or 3600) - 120 < time.time()
+        if force or expired:
+            try:
+                creds = refresh(creds)
+            except Exception as exc:  # noqa: BLE001
+                log('refresh failed:', type(exc).__name__)
+                raise
+        return creds['access_token']
+
+
+def upstream(method, path, body=None, token=None, stream=False):
+    conn = http.client.HTTPSConnection(API_HOST, timeout=TIMEOUT)
+    headers = {'Authorization': 'Bearer ' + (token or access_token()),
+               'Content-Type': 'application/json'}
+    payload = json.dumps(body).encode() if body is not None else None
+    conn.request(method, path, payload, headers)
+    return conn, conn.getresponse()
+
+
+def sse_events(resp):
+    for raw in resp:
+        line = raw.decode('utf-8', 'ignore').strip()
+        if not line.startswith('data:'):
+            continue
+        chunk = line[5:].strip()
+        if not chunk or chunk == '[DONE]':
+            continue
+        try:
+            yield json.loads(chunk)
+        except Exception:
+            continue
+
+
+def aggregate(events):
+    """Fold Responses SSE events into a single response object."""
+    out = {'id': None, 'object': 'response', 'created_at': int(time.time()),
+           'model': None, 'status': 'completed', 'output': [], 'usage': {}}
+    for ev in events:
+        t = ev.get('type')
+        if t in ('response.created', 'response.completed', 'response.incomplete'):
+            r = ev.get('response') or {}
+            for k in ('id', 'model', 'created_at', 'status', 'usage', 'output'):
+                if k in r and r[k] is not None:
+                    if k == 'output' and r[k]:
+                        out['output'] = r[k]
+                    elif k != 'output':
+                        out[k] = r[k]
+        elif t == 'response.output_item.done':
+            item = ev.get('item') or {}
+            if item and all(i.get('id') != item.get('id') for i in out['output']):
+                out['output'].append(item)
+        elif t == 'error':
+            out['status'] = 'failed'
+            out['error'] = ev.get('error') or ev
+    return out
+
+
+def to_chat_payload(resp_obj, model):
+    text_parts, tool_calls = [], []
+    for item in resp_obj.get('output') or []:
+        if item.get('type') == 'message':
+            for part in item.get('content') or []:
+                if isinstance(part, dict) and part.get('text'):
+                    text_parts.append(part['text'])
+        elif item.get('type') == 'function_call':
+            tool_calls.append({
+                'id': item.get('call_id') or item.get('id') or 'call_' + uuid.uuid4().hex[:20],
+                'type': 'function',
+                'function': {'name': item.get('name'), 'arguments': item.get('arguments') or '{}'},
+            })
+    message = {'role': 'assistant', 'content': ''.join(text_parts) or None}
+    if tool_calls:
+        message['tool_calls'] = tool_calls
+    usage = resp_obj.get('usage') or {}
+    return {
+        'id': 'chatcmpl-' + (resp_obj.get('id') or uuid.uuid4().hex),
+        'object': 'chat.completion',
+        'created': int(time.time()),
+        'model': model,
+        'choices': [{'index': 0, 'message': message,
+                     'finish_reason': 'tool_calls' if tool_calls else 'stop'}],
+        'usage': {
+            'prompt_tokens': usage.get('input_tokens', 0),
+            'completion_tokens': usage.get('output_tokens', 0),
+            'total_tokens': usage.get('total_tokens', 0),
+        },
+    }
+
+
+def convert_messages(messages):
+    items = []
+    for msg in messages:
+        role = msg.get('role')
+        content = msg.get('content')
+        if isinstance(content, list):
+            content = '\n'.join(p.get('text', '') for p in content if isinstance(p, dict))
+        if role in ('system', 'developer', 'user'):
+            items.append({'role': 'user' if role == 'user' else 'system', 'content': content or ''})
+        elif role == 'assistant':
+            if content:
+                items.append({'role': 'assistant', 'content': [{'type': 'output_text', 'text': content}]})
+            for call in msg.get('tool_calls') or []:
+                fn = call.get('function') or {}
+                items.append({'type': 'function_call', 'call_id': call.get('id'),
+                              'name': fn.get('name'), 'arguments': fn.get('arguments') or '{}'})
+        elif role == 'tool':
+            items.append({'type': 'function_call_output',
+                          'call_id': msg.get('tool_call_id'),
+                          'output': content if isinstance(content, str) else json.dumps(content)})
+    return items
+
+
+def convert_tools(tools):
+    out = []
+    for tool in tools or []:
+        fn = tool.get('function') or tool
+        if not fn.get('name'):
+            continue
+        entry = {'type': 'function', 'name': fn['name'],
+                 'description': fn.get('description') or '',
+                 'parameters': fn.get('parameters') or {'type': 'object', 'properties': {}}}
+        if fn.get('strict') and entry['parameters'].get('additionalProperties') is False:
+            entry['strict'] = True
+        out.append(entry)
+    return out
+
+
+def build_responses_body(body):
+    out = {
+        'model': body.get('model'),
+        'store': False,
+        'stream': True,
+        'input': convert_messages(body.get('messages') or []),
+    }
+    tools = convert_tools(body.get('tools'))
+    if tools:
+        out['tools'] = tools
+        choice = body.get('tool_choice')
+        if isinstance(choice, str) and choice in ('auto', 'none', 'required'):
+            out['tool_choice'] = choice
+        elif isinstance(choice, dict):
+            name = (choice.get('function') or {}).get('name')
+            if name:
+                out['tool_choice'] = {'type': 'function', 'name': name}
+    limit = body.get('max_completion_tokens') or body.get('max_tokens')
+    if limit:
+        # upstream rejects values below 16
+        out['max_output_tokens'] = max(16, int(limit))
+    for src, dst in (('temperature', 'temperature'), ('top_p', 'top_p'),
+                     ('parallel_tool_calls', 'parallel_tool_calls')):
+        if body.get(src) is not None:
+            out[dst] = body[src]
+    effort = body.get('reasoning_effort') or (body.get('reasoning') or {}).get('effort')
+    if effort:
+        out['reasoning'] = {'effort': effort, 'summary': 'auto'}
+    return out
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
+
+    def log_message(self, *a):
+        pass
+
+    # ------------------------------------------------------------------ helpers
+    def json_out(self, code, obj):
+        data = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def err(self, code, message, etype='invalid_request_error'):
+        self.json_out(code, {'error': {'message': message, 'type': etype, 'code': code}})
+
+    def body(self):
+        n = int(self.headers.get('Content-Length') or 0)
+        return json.loads(self.rfile.read(n) or b'{}')
+
+    # ------------------------------------------------------------------- routes
+    def do_GET(self):
+        if self.path.startswith('/healthz'):
+            return self.json_out(200, {'ok': True})
+        if self.path.startswith('/v1/models'):
+            try:
+                conn, resp = upstream('GET', '/v1/models')
+                raw = resp.read()
+                if resp.status != 200:
+                    return self.json_out(resp.status, json.loads(raw or b'{}'))
+                data = json.loads(raw)
+                models = [{'id': m.get('slug'), 'object': 'model', 'owned_by': 'openai'}
+                          for m in data.get('models', []) if m.get('visibility') == 'list']
+                return self.json_out(200, {'object': 'list', 'data': models})
+            except Exception as exc:  # noqa: BLE001
+                log('models error', type(exc).__name__)
+                return self.err(502, 'upstream models failed')
+        return self.err(404, 'not found')
+
+    def do_POST(self):
+        try:
+            body = self.body()
+        except Exception:
+            return self.err(400, 'bad json')
+        path = urllib.parse.urlparse(self.path).path
+        if path == '/v1/responses':
+            return self.handle_responses(body)
+        if path == '/v1/chat/completions':
+            return self.handle_chat(body)
+        return self.err(404, 'not found')
+
+    # ---------------------------------------------------------------- responses
+    def handle_responses(self, body):
+        log('responses', body.get('model'))
+        body = dict(body)
+        body.pop('_client_stream', None)
+        want_stream = bool(body.get('stream'))
+        body['store'] = False
+        body['stream'] = True
+        try:
+            conn, resp = upstream('POST', '/v1/responses', body)
+        except Exception as exc:  # noqa: BLE001
+            log('responses error', type(exc).__name__)
+            return self.err(502, 'upstream failed')
+        if resp.status == 401:
+            conn.close()
+            try:
+                conn, resp = upstream('POST', '/v1/responses', body, token=access_token(force=True))
+            except Exception:
+                return self.err(502, 'auth refresh failed')
+        if resp.status != 200:
+            raw = resp.read()
+            return self.json_out(resp.status, json.loads(raw or b'{}'))
+
+        if not want_stream:
+            obj = aggregate(sse_events(resp))
+            conn.close()
+            return self.json_out(200, obj)
+
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.close_connection = True
+
+        terminal_seen = False
+        last_id = None
+        model = body.get('model')
+        count = 0
+        try:
+            for raw in resp:
+                line = raw.decode('utf-8', 'ignore').strip()
+                if line.startswith('data:'):
+                    chunk = line[5:].strip()
+                    if chunk and chunk != '[DONE]':
+                        try:
+                            ev = json.loads(chunk)
+                        except Exception:
+                            ev = None
+                        if ev:
+                            count += 1
+                            t = ev.get('type', '')
+                            if t == 'response.created':
+                                last_id = (ev.get('response') or {}).get('id')
+                            if t in ('response.completed', 'response.incomplete', 'response.failed'):
+                                terminal_seen = True
+                self.wfile.write(raw)
+            if not terminal_seen:
+                # Upstream hung up without a terminal event. LiteLLM (and most
+                # clients) treat that as a broken stream, so close it cleanly.
+                log('WARN upstream ended without terminal event, events=%d model=%s' % (count, model))
+                done = {'type': 'response.completed',
+                        'response': {'id': last_id or ('resp_' + uuid.uuid4().hex),
+                                     'object': 'response', 'status': 'completed',
+                                     'created_at': int(time.time()), 'model': model,
+                                     'output': [], 'usage': {}}}
+                self.wfile.write(('data: ' + json.dumps(done) + '\n\n').encode())
+            self.wfile.flush()
+        except Exception as exc:  # noqa: BLE001
+            log('WARN relay error:', type(exc).__name__)
+        finally:
+            conn.close()
+
+    # --------------------------------------------------------------------- chat
+    def handle_chat(self, body):
+        model = body.get('model') or 'gpt-6.1-terra'
+        log('chat', model, 'stream' if body.get('stream') else 'sync')
+        want_stream = bool(body.get('stream'))
+        upstream_body = build_responses_body(body)
+        try:
+            conn, resp = upstream('POST', '/v1/responses', upstream_body)
+        except Exception as exc:  # noqa: BLE001
+            log('chat upstream error', type(exc).__name__)
+            return self.err(502, 'upstream failed')
+        if resp.status == 401:
+            conn.close()
+            try:
+                conn, resp = upstream('POST', '/v1/responses', upstream_body,
+                                      token=access_token(force=True))
+            except Exception:
+                return self.err(502, 'auth refresh failed')
+        if resp.status != 200:
+            raw = resp.read()
+            conn.close()
+            try:
+                payload = json.loads(raw or b'{}')
+            except Exception:
+                payload = {'error': {'message': raw[:300].decode('utf-8', 'ignore')}}
+            return self.json_out(resp.status, payload)
+
+        if not want_stream:
+            obj = aggregate(sse_events(resp))
+            conn.close()
+            return self.json_out(200, to_chat_payload(obj, model))
+
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.close_connection = True
+
+        cid = 'chatcmpl-' + uuid.uuid4().hex
+        created = int(time.time())
+        sent_role = False
+        tool_index = -1
+        tool_sent = {}
+
+        def chunk(delta, finish=None):
+            payload = {'id': cid, 'object': 'chat.completion.chunk', 'created': created,
+                       'model': model,
+                       'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}]}
+            self.wfile.write(('data: ' + json.dumps(payload) + '\n\n').encode())
+
+        try:
+            for ev in sse_events(resp):
+                t = ev.get('type', '')
+                if t == 'response.output_text.delta':
+                    if not sent_role:
+                        chunk({'role': 'assistant', 'content': ''})
+                        sent_role = True
+                    chunk({'content': ev.get('delta', '')})
+                elif t == 'response.output_item.added':
+                    item = ev.get('item') or {}
+                    if item.get('type') == 'function_call':
+                        tool_index += 1
+                        tool_sent[item.get('id')] = tool_index
+                        chunk({'tool_calls': [{
+                            'index': tool_index, 'id': item.get('call_id') or item.get('id'),
+                            'type': 'function',
+                            'function': {'name': item.get('name'), 'arguments': ''}}]})
+                elif t == 'response.function_call_arguments.delta':
+                    idx = tool_sent.get(ev.get('item_id'), 0)
+                    chunk({'tool_calls': [{'index': idx,
+                                           'function': {'arguments': ev.get('delta', '')}}]})
+                elif t == 'response.completed':
+                    chunk({}, 'tool_calls' if tool_sent else 'stop')
+            self.wfile.write(b'data: [DONE]\n\n')
+            self.wfile.flush()
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+
+def serve(host):
+    # bind_retry: на загрузке docker0 может ещё не существовать, и 172.17.0.1
+    # отвечает EADDRNOTAVAIL. Без повтора поток умирает молча, а LiteLLM потом
+    # получает 'Connection refused' на host.docker.internal.
+    delay = 1
+    for attempt in range(1, 9):
+        try:
+            srv = ThreadingHTTPServer((host, PORT), Handler)
+            break
+        except OSError as exc:
+            log(f'bind {host}:{PORT} failed ({exc}); retry {attempt} in {delay}s')
+            time.sleep(delay)
+            delay = min(delay * 2, 10)
+    else:
+        log(f'giving up on {host}:{PORT}')
+        return
+    srv.daemon_threads = True
+    log('listening on', host, PORT)
+    srv.serve_forever()
+
+
+def main():
+    if not os.path.exists(AUTH_FILE):
+        log('missing auth file', AUTH_FILE)
+        sys.exit(1)
+    threads = [threading.Thread(target=serve, args=(h,), daemon=True) for h in BIND]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+
+if __name__ == '__main__':
+    main()
