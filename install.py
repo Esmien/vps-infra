@@ -2635,6 +2635,12 @@ server {{
             return
 
         delay = getattr(self.args, "postcheck_delay", "15min") or "15min"
+        # Скрипт вызывает hermes по абсолютному пути: если /usr/local/bin/hermes нет
+        # (агент ставился в /root/.local/bin и симлинк не создался), пост-проверка
+        # молча пишет пустой отчёт и не отправляет его. Берём реальный путь.
+        hermes_bin = "/usr/local/bin/hermes"
+        if not Path(hermes_bin).is_file():
+            hermes_bin = shutil.which("hermes") or hermes_bin
         prompt_path = Path("/etc/hermes-postcheck.prompt")
         script_path = Path("/usr/local/bin/hermes-postcheck.sh")
         service = Path("/etc/systemd/system/hermes-postcheck.service")
@@ -2653,13 +2659,13 @@ REPORT=/var/lib/hermes-postcheck/report.md
 mkdir -p "$(dirname "$REPORT")"
 {
     echo "=== пост-проверка $(date -u +%FT%TZ) ==="
-    /usr/local/bin/hermes chat --query-file /etc/hermes-postcheck.prompt --oneshot -Q --yolo 2>&1
+    @HERMES@ chat --query-file /etc/hermes-postcheck.prompt --oneshot -Q --yolo 2>&1
 } > "$REPORT"
-/usr/local/bin/hermes send -t telegram -f "$REPORT" \
+@HERMES@ send -t telegram -f "$REPORT" \
     -s "Пост-проверка после развёртывания" >>"$LOG" 2>&1
 systemctl disable --now hermes-postcheck.timer >>"$LOG" 2>&1 || true
 exit 0
-""", 0o755)
+""".replace("@HERMES@", hermes_bin), 0o755)
         self.write_file(service, """[Unit]
 Description=Hermes: пост-проверка сервера после развёртывания
 After=docker.service network-online.target
