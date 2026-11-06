@@ -282,7 +282,6 @@ STEPS: list[tuple[str, str]] = [
     ("verify", "Проверка результата"),
     ("health", "Проверка доступности сервисов"),
     ("hermes", "Hermes"),
-    ("postcheck", "Пост-проверка Hermes (таймер)"),
     ("report", "Отчёт с секретами"),
 ]
 STEP_NAMES = [s[0] for s in STEPS]
@@ -2516,17 +2515,6 @@ server {{
 
     # ── проверка ────────────────────────────────────────────────────────────
 
-    POSTCHECK_PROMPT = """Ты — дежурный администратор этого сервера. Только что завершилось автоматическое развёртывание стека.
-
-Первым делом прочитай ранбук {report_path} и выполни его раздел 1 «Пост-проверка после развёртывания» — целиком, по шагам, которые там описаны. В файле точные команды, ожидаемые результаты и то, что считается отклонением; не заменяй его содержимое импровизацией и не выдумывай свои проверки вместо описанных.
-
-Дальше — один короткий отчёт владельцу.
-
-Только чтение: не меняй конфиги, ничего не перезапускай и не удаляй — тебе нужно собрать факты и отчитаться. Если ранбук требует изменения состояния, остановись и сформулируй, что именно нужно и почему.
-
-Формат: не больше 25 строк, по-русски, без воды и без секретов. Сначала вердикт одной строкой («всё по топологии» или «есть отклонения»), затем только отклонения списком: что не так и что сделать. Если всё в порядке — перечисли одной строкой, что именно проверил. Не предлагай переустанавливать стек.
-"""
-
     REPORT_FILES = (
         ("ai/.env", "OPEN WEBUI / LITELLM"),
         ("notifications/.env", "БОТЫ УВЕДОМЛЕНИЙ"),
@@ -2623,75 +2611,6 @@ server {{
                   "text=Сообщение с ключом удалите из чата сразу после сохранения: "
                   "кто видел ключ и файл — прочитает секреты."], check=False, quiet=True)
         ok("ключ отправлен отдельным сообщением")
-
-    def step_postcheck(self) -> None:
-        """Одноразовый таймер: через N минут Hermes сам проверяет сервер и пишет в TG."""
-        step("Пост-проверка Hermes (таймер)")
-        if getattr(self.args, "no_postcheck", False):
-            info("--no-postcheck: таймер не ставлю")
-            return
-        if not shutil.which("hermes") and not Path("/usr/local/bin/hermes").is_file():
-            warn("Hermes не установлен — пост-проверку не ставлю")
-            return
-
-        delay = getattr(self.args, "postcheck_delay", "15min") or "15min"
-        # Скрипт вызывает hermes по абсолютному пути: если /usr/local/bin/hermes нет
-        # (агент ставился в /root/.local/bin и симлинк не создался), пост-проверка
-        # молча пишет пустой отчёт и не отправляет его. Берём реальный путь.
-        hermes_bin = "/usr/local/bin/hermes"
-        if not Path(hermes_bin).is_file():
-            hermes_bin = shutil.which("hermes") or hermes_bin
-        prompt_path = Path("/etc/hermes-postcheck.prompt")
-        script_path = Path("/usr/local/bin/hermes-postcheck.sh")
-        service = Path("/etc/systemd/system/hermes-postcheck.service")
-        timer = Path("/etc/systemd/system/hermes-postcheck.timer")
-
-        if self.dry:
-            info(f"[dry-run] поставил бы таймер на +{delay}: hermes chat --oneshot → отчёт в Telegram")
-            return
-
-        self.write_file(prompt_path, self.POSTCHECK_PROMPT.replace("{report_path}", str(ROOT / "REPORT.md")), 0o600)
-        self.write_file(script_path, """#!/bin/bash
-# Одноразовая пост-проверка сервера агентом Hermes. Отчёт уходит владельцу в Telegram.
-set -uo pipefail
-LOG=/var/log/hermes-postcheck.log
-REPORT=/var/lib/hermes-postcheck/report.md
-mkdir -p "$(dirname "$REPORT")"
-{
-    echo "=== пост-проверка $(date -u +%FT%TZ) ==="
-    @HERMES@ chat --query-file /etc/hermes-postcheck.prompt --oneshot -Q --yolo 2>&1
-} > "$REPORT"
-@HERMES@ send -t telegram -f "$REPORT" \
-    -s "Пост-проверка после развёртывания" >>"$LOG" 2>&1
-systemctl disable --now hermes-postcheck.timer >>"$LOG" 2>&1 || true
-exit 0
-""".replace("@HERMES@", hermes_bin), 0o755)
-        self.write_file(service, """[Unit]
-Description=Hermes: пост-проверка сервера после развёртывания
-After=docker.service network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/hermes-postcheck.sh
-TimeoutStartSec=1800
-Nice=10
-""", 0o644)
-        self.write_file(timer, f"""[Unit]
-Description=Одноразовый запуск пост-проверки Hermes через {delay} после развёртывания
-
-[Timer]
-OnActiveSec={delay}
-AccuracySec=1min
-Unit=hermes-postcheck.service
-
-[Install]
-WantedBy=timers.target
-""", 0o644)
-        self.run(["systemctl", "daemon-reload"], check=False)
-        self.run(["systemctl", "enable", "hermes-postcheck.timer"], check=False)
-        self.run(["systemctl", "restart", "hermes-postcheck.timer"], check=False)
-        ok(f"пост-проверка запустится через {delay}, отчёт придёт в Telegram")
 
     def step_verify(self) -> None:
         step("Проверка результата")
@@ -3396,7 +3315,6 @@ MENU_ITEMS: tuple[tuple[str, tuple[str, ...], str, str], ...] = (
     ("secrets",     ("--secrets-from-bot",),  "Секреты из Telegram",    "разложить .env из зашифрованного архива"),
     ("rest_hermes", ("--restore-hermes",),    "Состояние Hermes",       "config/skills/скрипты из hermes-state"),
     ("hermes",      ("--hermes",),            "Установить Hermes",      "агент в хостовом режиме"),
-    ("no_post",     ("--no-postcheck",),      "Без пост-проверки",      "не ставить таймер проверки через 15 минут"),
     ("no_report",   ("--no-report",),         "Без отчёта с секретами", "не отправлять архив .env в Telegram"),
     ("reconf",      ("--reconfigure",),       "Переспросить секреты",   "Enter — оставить текущее значение"),
 )
@@ -3585,10 +3503,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--yes", "-y", action="store_true", help="без вопросов: существующие значения/дефолты")
     p.add_argument("--reconfigure", action="store_true", help="переспросить параметры (Enter = оставить)")
     p.add_argument("--only", help="выполнить только шаги (через запятую)")
-    p.add_argument("--postcheck-delay", default="15min",
-                   help="через сколько после развёртывания Hermes проверит сервер (systemd-формат, default 15min)")
-    p.add_argument("--no-postcheck", dest="no_postcheck", action="store_true",
-                   help="не ставить таймер пост-проверки")
     p.add_argument("--no-report", dest="no_report", action="store_true",
                    help="не отправлять отчёт с секретами в Telegram")
     p.add_argument("--no-ask-hermes", dest="no_ask_hermes", action="store_true",
