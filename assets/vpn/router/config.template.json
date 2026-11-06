@@ -13,6 +13,26 @@
      {
       "id": "<VLESS_UUID>",
       "email": "ws-user"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "ws-in:Наташа"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "ws-in:Юля"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "ws-in:Валера"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "ws-in:Оля"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "ws-in:Игорь"
      }
     ],
     "decryption": "none"
@@ -47,6 +67,26 @@
      {
       "id": "<VLESS_UUID>",
       "email": "in-general"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-general:Наташа"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-general:Юля"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-general:Валера"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-general:Оля"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-general:Игорь"
      }
     ],
     "decryption": "none"
@@ -81,6 +121,26 @@
      {
       "id": "<VLESS_UUID>",
       "email": "in-france"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-france:Наташа"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-france:Юля"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-france:Валера"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-france:Оля"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-france:Игорь"
      }
     ],
     "decryption": "none"
@@ -115,6 +175,26 @@
      {
       "id": "<VLESS_UUID>",
       "email": "in-test"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-test:Наташа"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-test:Юля"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-test:Валера"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-test:Оля"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-test:Игорь"
      }
     ],
     "decryption": "none"
@@ -149,6 +229,26 @@
      {
       "id": "<VLESS_UUID>",
       "email": "in-fi"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-fi:Наташа"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-fi:Юля"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-fi:Валера"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-fi:Оля"
+     },
+     {
+      "id": "<VLESS_UUID>",
+      "email": "in-fi:Игорь"
      }
     ],
     "decryption": "none"
@@ -245,10 +345,17 @@
   "rules": [
    {
     "type": "field",
-    "outboundTag": "blocked",
     "ip": [
      "geoip:private"
-    ]
+    ],
+    "outboundTag": "blocked"
+   },
+   {
+    "type": "field",
+    "protocol": [
+     "bittorrent"
+    ],
+    "outboundTag": "blocked"
    },
    {
     "type": "field",
@@ -257,19 +364,42 @@
      "domain:googleapis.com",
      "domain:gstatic.com",
      "domain:googleusercontent.com",
-     "domain:google.dev",
      "domain:withgoogle.com",
-     "domain:gemini.google.com",
-     "domain:bard.google.com"
+     "domain:google.dev"
     ],
-    "outboundTag": "fr"
+    "balancerTag": "bal-google"
    },
    {
     "type": "field",
-    "outboundTag": "blocked",
-    "protocol": [
-     "bittorrent"
-    ]
+    "domain": [
+     "domain:youtube.com",
+     "domain:googlevideo.com",
+     "domain:ytimg.com",
+     "domain:youtu.be",
+     "domain:youtube-nocookie.com",
+     "domain:ggpht.com",
+     "domain:yt.be"
+    ],
+    "balancerTag": "bal-yt"
+   },
+   {
+    "type": "field",
+    "domain": [
+     "domain:ru",
+     "domain:su",
+     "domain:рф",
+     "domain:vk.com",
+     "domain:vk.me",
+     "domain:vk-cdn.net",
+     "domain:userapi.com",
+     "domain:mycdn.me",
+     "domain:max.ru",
+     "domain:ozon.com",
+     "domain:wbstatic.net",
+     "domain:sberbank.com",
+     "domain:tinkoff.ru"
+    ],
+    "balancerTag": "bal-ru"
    },
    {
     "type": "field",
@@ -301,21 +431,6 @@
    },
    {
     "type": "field",
-    "outboundTag": "fr",
-    "domain": [
-     "domain:google.com",
-     "domain:googleapis.com",
-     "domain:gstatic.com",
-     "domain:googleusercontent.com",
-     "domain:google.dev",
-     "domain:withgoogle.com",
-     "domain:gemini.google.com",
-     "domain:bard.google.com"
-    ]
-   },
-   {
-    "type": "field",
-    "outboundTag": "fr",
     "ip": [
      "8.8.4.0/24",
      "8.8.8.0/24",
@@ -336,13 +451,58 @@
      "2a00:1450::/32",
      "2607:f8b0::/32",
      "2c0f:fb50::/32"
-    ]
+    ],
+    "balancerTag": "bal-google"
    },
    {
     "type": "field",
-    "outboundTag": "fr",
-    "network": "tcp,udp"
+    "network": "tcp,udp",
+    "outboundTag": "fr"
+   }
+  ],
+  "balancers": [
+   {
+    "tag": "bal-google",
+    "selector": [
+     "fr"
+    ],
+    "strategy": {
+     "type": "leastPing"
+    }
+   },
+   {
+    "tag": "bal-ru",
+    "selector": [
+     "p15",
+     "p16",
+     "p17"
+    ],
+    "strategy": {
+     "type": "leastPing"
+    }
+   },
+   {
+    "tag": "bal-yt",
+    "selector": [
+     "p20"
+    ],
+    "strategy": {
+     "type": "leastPing"
+    }
    }
   ]
+ },
+ "observatory": {
+  "subjectSelector": [
+   "fr",
+   "fi",
+   "p15",
+   "p16",
+   "p17",
+   "p20"
+  ],
+  "probeUrl": "https://www.gstatic.com/generate_204",
+  "probeInterval": "30s",
+  "enableConcurrency": true
  }
 }
