@@ -977,6 +977,9 @@ class Installer:
         base = [
             "curl", "ca-certificates", "gnupg", "lsb-release", "git",
             "python3", "python3-venv", "python3-pip", "rsync", "tar", "zstd", "jq",
+            # vnstat: per-hour traffic history on the uplink — the only way to answer
+            # "did the VPN users eat the channel" after the fact.
+            "vnstat",
         ]
         have = []
         for pkg in base:
