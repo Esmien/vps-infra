@@ -1,0 +1,72 @@
+# Пользовательский терминал песочницы. Один файл = один пользователь.
+# Provisioner подставляет: SB_SLUG, SB_KEY, SB_DIR, SB_MEM, SB_MEMSWAP, SB_CPUS.
+# Запуск: docker compose -p sb-<slug> -f template.compose.yml up -d
+# Общего слоя с пакетами нет: всё нужное под задачу пользователь ставит себе сам
+# (~/.local, ~/bin). Общий слой — только образ.
+services:
+  terminal:
+    # Пин по дайджесту: :latest — rolling-тег, тот же тег со временем указывает на другой код.
+    image: ghcr.io/open-webui/open-terminal@sha256:81a5394b3cd4ae32adb600f2135f09ee124de37f26b0a780e2f5692472c0fc5c
+    container_name: ot-u-${SB_SLUG}
+    restart: always
+    user: "1000:1000"
+    command: ["run", "--cwd", "/workspace"]
+    mem_limit: ${SB_MEM:-1536m}
+    # Своп контейнеру разрешён: 1.5 ГБ памяти + 0.5 ГБ свопа.
+    # memswap_limit == mem_limit означал бы «своп запрещён» — тогда пик сразу убивает контейнер.
+    memswap_limit: ${SB_MEMSWAP:-2g}
+    cpus: "${SB_CPUS:-1.0}"
+    pids_limit: 256
+    cap_drop: ["ALL"]
+    # python3-ot несёт файловую capability cap_setgid — без неё exec падает с EPERM.
+    cap_add: ["SETGID"]
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    volumes:
+      - ${SB_DIR}:/workspace
+    environment:
+      OPEN_TERMINAL_API_KEY: ${SB_KEY}
+      # HOME = рабочий каталог: pip --user кладёт пакеты в /workspace/.local,
+      # они живут внутри квоты пользователя и защищены от LRU-чистки.
+      HOME: /workspace
+      # /tmp — tmpfs с noexec, PyInstaller-бутлоадеры распаковывают .so в TMPDIR.
+      TMPDIR: /workspace/.tmp
+      PATH: /workspace/.local/bin:/workspace/bin:/usr/local/bin:/usr/bin:/bin
+      # Рецепты для моделей. Open WebUI забирает этот текст (GET /system) и подставляет
+      # в контекст любой модели, работающей с этим терминалом. Правится здесь, один раз.
+      OPEN_TERMINAL_SYSTEM_PROMPT: |
+        You have a personal Linux sandbox ({{os}} {{kernel}}, {{arch}}, python {{python_version}}).
+        Your working directory is the only place you can write; it is also your home, and your TMPDIR is <work>/.tmp.
+
+        You are NOT root and cannot become root: sudo, apt, apt-get install, systemctl and pip3 install (without --user) do not work here. Do not try them.
+
+        Installing what a task needs — do it yourself, these work:
+        - Python: `pip3 install --user <package>` — goes to ~/.local, already on PATH.
+        - Node: `npm install --prefix ~/.local <package>`, binaries land in ~/.local/bin.
+        - Standalone binaries: download into ~/bin, `chmod +x`.
+        - A tool shipped as a system .deb: `curl -fsSLO <debian-pool-url>`, then `dpkg-deb -x file.deb ./pkg` and run `./pkg/usr/bin/<tool>`; no root needed.
+        - Compilers are present: gcc, g++, make, cmake, git.
+
+        If a task truly requires a system-level package (daemon, kernel module, a global path), stop and say so: only the server owner can add it, and that needs rebuilding the image. Do not invent workarounds, do not modify anything outside your working directory.
+
+        Disk: your workspace has a 2 GB budget. Binaries and package directories (~/.local, ~/bin) are excluded from cleanup; working files are deleted oldest-first when the budget is reached, so keep only what matters and clean build artifacts when done.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -m 4 http://127.0.0.1:8000/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "2"
+    networks:
+      - stack-net
+
+networks:
+  stack-net:
+    external: true

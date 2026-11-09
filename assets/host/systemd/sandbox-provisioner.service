@@ -1,0 +1,12 @@
+[Unit]
+Description=Per-user Open WebUI sandboxes: reconcile containers, connections, quotas
+Documentation=https://github.com/open-webui/open-terminal
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sandbox-provisioner.py
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=300
