@@ -10,7 +10,7 @@ services:
     container_name: ot-u-${SB_SLUG}
     restart: always
     user: "1000:1000"
-    command: ["run", "--cwd", "/workspace"]
+    command: ["run", "--cwd", "/home/user/workspace"]
     mem_limit: ${SB_MEM:-1536m}
     # Своп контейнеру разрешён: 1.5 ГБ памяти + 0.5 ГБ свопа.
     # memswap_limit == mem_limit означал бы «своп запрещён» — тогда пик сразу убивает контейнер.
@@ -26,20 +26,22 @@ services:
     tmpfs:
       - /tmp:size=256m,mode=1777
     volumes:
-      - ${SB_DIR}:/workspace
+      - ${SB_DIR}:/home/user/workspace
     environment:
       OPEN_TERMINAL_API_KEY: ${SB_KEY}
-      # HOME = рабочий каталог: pip --user кладёт пакеты в /workspace/.local,
+      # HOME = рабочий каталог: pip --user кладёт пакеты в /home/user/workspace/.local,
       # они живут внутри квоты пользователя и защищены от LRU-чистки.
-      HOME: /workspace
+      HOME: /home/user/workspace
       # /tmp — tmpfs с noexec, PyInstaller-бутлоадеры распаковывают .so в TMPDIR.
-      TMPDIR: /workspace/.tmp
-      PATH: /workspace/.local/bin:/workspace/bin:/usr/local/bin:/usr/bin:/bin
+      TMPDIR: /home/user/workspace/.tmp
+      # Файловый браузер стартует в /home/user и показывает ровно одну папку — workspace.
+      OPEN_TERMINAL_FILE_BROWSER_ROOT: /home/user
+      PATH: /home/user/workspace/.local/bin:/home/user/workspace/bin:/usr/local/bin:/usr/bin:/bin
       # Рецепты для моделей. Open WebUI забирает этот текст (GET /system) и подставляет
       # в контекст любой модели, работающей с этим терминалом. Правится здесь, один раз.
       OPEN_TERMINAL_SYSTEM_PROMPT: |
         You have a personal Linux sandbox ({{os}} {{kernel}}, {{arch}}, python {{python_version}}).
-        Your working directory is the only place you can write; it is also your home, and your TMPDIR is <work>/.tmp.
+        You work inside /home/user/workspace — that is your home and the only place you can write; TMPDIR is <work>/.tmp.
 
         You are NOT root and cannot become root: sudo, apt, apt-get install, systemctl and pip3 install (without --user) do not work here. Do not try them.
 

@@ -40,7 +40,7 @@ QUOTA_BYTES = 2 * 1024**3
 PROTECTED = {".local", "bin", "venv", ".arduino15", "Arduino"}
 RETENTION_DAYS = 3
 CONTAINER_PREFIX = "ot-u-"
-CONNECTION_NAME = "Песочница"
+CONNECTION_NAME = "Песочница"  # префикс; к нему добавляется часть email до собаки
 OWNER_UID_GID = 1000
 DEFAULT_LIMITS = {"mem": "1536m", "memswap": "2g", "cpus": "1.0"}
 
@@ -140,10 +140,10 @@ def wait_healthy(name: str, timeout: float = 90.0) -> bool:
 
 
 def ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
-    for sub in (".tmp", "bin"):
-        os.makedirs(os.path.join(path, sub), exist_ok=True)
-    for target in [path, os.path.join(path, ".tmp"), os.path.join(path, "bin")]:
+    """Рабочий каталог + скрытый TMPDIR. Ничего лишнего в витрине: пользователь
+    должен видеть в файловом браузере только свои файлы, без служебных папок."""
+    for target in (path, os.path.join(path, ".tmp")):
+        os.makedirs(target, exist_ok=True)
         os.chown(target, OWNER_UID_GID, OWNER_UID_GID)
         os.chmod(target, 0o700)
 
@@ -180,9 +180,10 @@ def set_connections(conns: list[dict]) -> None:
 
 
 def desired_connection(entry: dict) -> dict:
+    label = (entry.get("email") or entry["slug"]).split("@")[0]
     return {
         "id": entry["conn_id"],
-        "name": CONNECTION_NAME,
+        "name": f"{CONNECTION_NAME} · {label}",
         "enabled": True,
         "url": f"http://{entry['container']}:8000",
         "path": "/openapi.json",
@@ -382,19 +383,23 @@ def reconcile(dry_run: bool, only: str | None) -> int:
             actions += 1
             continue
 
-        # существующий: контейнер мог быть остановлен или пересоздан
+        # существующий: `up -d` идемпотентен, но пересоздаёт контейнер, если шаблон
+        # изменился (пути, лимиты, промпт) — иначе правки шаблона не доезжают до людей.
         if not entry.get("active"):
             continue
         health = container_health(entry["container"])
-        if not health:
-            if dry_run:
+        if dry_run:
+            if not health:
                 log(f"[dry-run] поднял бы {entry['container']}")
-            else:
-                compose(entry, ["up", "-d"])
-                if not wait_healthy(entry["container"]):
-                    log(f"ОШИБКА {entry['container']}: не healthy после подъёма")
-                    continue
-                log(f"поднят {entry['container']}")
+                actions += 1
+            continue
+        before = health
+        compose(entry, ["up", "-d"])
+        if before != container_health(entry["container"]) or not before:
+            if not wait_healthy(entry["container"]):
+                log(f"ОШИБКА {entry['container']}: не healthy после подъёма")
+                continue
+            log(f"синхронизирован {entry['container']} (было: {before or 'нет'})")
             actions += 1
 
     # 2. Потерявшие право (роль не user) и удалённые пользователи
