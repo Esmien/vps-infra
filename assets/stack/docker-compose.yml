@@ -88,6 +88,10 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - /home/ai_service/webui_data:/app/backend/data
+      # Картинки из Image Generator кладутся в generated_images песочницы
+      # пользователя: каталог песочниц rw + state.json провижионера (ro).
+      - /home/ai_service/sandbox/users:/sandbox-users
+      - /home/ai_service/sandbox-users/state.json:/sandbox-state/state.json:ro
     depends_on:
       litellm:
         condition: service_healthy
