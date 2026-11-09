@@ -8,46 +8,65 @@
  * доступная песочница — выбираем её и один раз перезагружаем страницу, чтобы
  * сторы SvelteKit поднялись уже с выбранным терминалом.
  *
- * Поведение после первого раза: флаг в localStorage. Если пользователь позже
- * сам выключит терминал, мы больше не навязываемся.
+ * Важно про вход: логин в SPA страницу не перезагружает, токен появляется в
+ * localStorage позже. Поэтому если токена на старте нет — короткий опрос
+ * (до 30 с), и выбор делается сразу после появления токена.
+ *
+ * Поведение после первого раза: флаг с отпечатком токена. Если пользователь
+ * позже сам выключит терминал, в этом входе мы больше не навязываемся.
  */
 (function () {
-  try {
-    var KEY = 'selectedTerminalId';
-    var DONE = 'esmien_terminal_autoselect_done';
+  var KEY = 'selectedTerminalId';
+  var DONE = 'esmien_terminal_autoselect_done';
 
-    if (localStorage.getItem(KEY)) return;
-    if (localStorage.getItem(DONE)) return;
+  function trySelect() {
+    try {
+      var token = localStorage.getItem('token');
+      if (!token) return false;
 
-    var token = localStorage.getItem('token');
-    if (!token) return;
+      if (localStorage.getItem(KEY)) return true; // уже выбран
 
-    localStorage.setItem(DONE, '1');
+      var fp = token.slice(-24);
+      if (localStorage.getItem(DONE) === fp) return true; // уже пытались в этом входе
 
-    fetch('/api/v1/terminals/', { headers: { Authorization: 'Bearer ' + token } })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (list) {
-        if (!Array.isArray(list)) {
-          localStorage.removeItem(DONE); // сеть/ошибка — попробуем в следующий раз
-          return;
-        }
-        if (list.length === 0) {
-          localStorage.removeItem(DONE); // песочницу ещё не создали — ждём
-          return;
-        }
-        if (list.length > 1) return; // несколько терминалов: выбор за пользователем
-        var t = list[0];
-        if (!t || !t.id || t.enabled === false) {
+      localStorage.setItem(DONE, fp);
+
+      fetch('/api/v1/terminals/', { headers: { Authorization: 'Bearer ' + token } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (list) {
+          if (!Array.isArray(list)) {
+            localStorage.removeItem(DONE); // сеть/ошибка — попробуем позже
+            return;
+          }
+          if (list.length === 0) {
+            localStorage.removeItem(DONE); // песочницу ещё не создали — ждём
+            return;
+          }
+          if (list.length > 1) return; // несколько терминалов: выбор за пользователем
+          var t = list[0];
+          if (!t || !t.id || t.enabled === false) {
+            localStorage.removeItem(DONE);
+            return;
+          }
+          localStorage.setItem(KEY, t.id);
+          location.reload();
+        })
+        .catch(function () {
           localStorage.removeItem(DONE);
-          return;
-        }
-        localStorage.setItem(KEY, t.id);
-        location.reload();
-      })
-      .catch(function () {
-        localStorage.removeItem(DONE);
-      });
-  } catch (e) {
-    /* тихо: сломанный автовыбор не должен ломать загрузку приложения */
+        });
+
+      return true;
+    } catch (e) {
+      return true; /* тихо: сломанный автовыбор не должен ломать загрузку приложения */
+    }
   }
+
+  if (trySelect()) return;
+
+  // Токена ещё нет (страница логина) — ждём его появления после входа.
+  var tries = 0;
+  var timer = setInterval(function () {
+    tries += 1;
+    if (trySelect() || tries > 20) clearInterval(timer);
+  }, 1500);
 })();
