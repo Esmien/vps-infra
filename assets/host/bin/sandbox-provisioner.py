@@ -237,7 +237,10 @@ def dir_size(path: str) -> int:
                     if entry.is_symlink():
                         continue
                     if entry.is_dir(follow_symlinks=False):
-                        if os.path.dirname(cur) == path and entry.name in PROTECTED:
+                        # Исключения — только каталоги верхнего уровня рабочего каталога
+                        # (cur == path). Раньше условие было перевёрнуто и LRU лез внутрь
+                        # ~/.local и ~/.arduino15, удаляя пакеты и тулчейны.
+                        if cur == path and entry.name in PROTECTED:
                             continue
                         stack.append(entry.path)
                     else:
@@ -268,10 +271,13 @@ def enforce_quota(entry: dict, dry_run: bool) -> None:
     path = entry["dir"]
     size = dir_size(path)
     prot = protected_size(path)
+    # Порог алерта по пакетным каталогам можно поднять отдельному пользователю
+    # (например тому, кому сознательно ставят тулчейн Arduino на 7 ГБ).
+    prot_limit = int(entry.get("protected_alert_bytes", QUOTA_BYTES))
     if size <= QUOTA_BYTES:
-        if prot > QUOTA_BYTES:
-            log(f"WARN {entry['slug']}: пакетные каталоги {prot/1024**3:.2f} ГБ > квоты при рабочих {size/1024**3:.2f} ГБ")
-            notify(f"Песочница {entry['slug']}: пакеты занимают {prot/1024**3:.1f} ГБ при лимите 2 ГБ. Решение за тобой.")
+        if prot > prot_limit:
+            log(f"WARN {entry['slug']}: пакетные каталоги {prot/1024**3:.2f} ГБ > порога {prot_limit/1024**3:.1f} ГБ при рабочих {size/1024**3:.2f} ГБ")
+            notify(f"Песочница {entry['slug']}: пакеты занимают {prot/1024**3:.1f} ГБ (порог {prot_limit/1024**3:.1f} ГБ). Решение за тобой.")
         return
 
     files: list[tuple[float, str, int]] = []

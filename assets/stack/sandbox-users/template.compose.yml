@@ -51,6 +51,7 @@ services:
         - Standalone binaries: download into ~/bin, `chmod +x`.
         - A tool shipped as a system .deb: `curl -fsSLO <debian-pool-url>`, then `dpkg-deb -x file.deb ./pkg` and run `./pkg/usr/bin/<tool>`; no root needed.
         - Compilers are present: gcc, g++, make, cmake, git.
+        - If a build fails with "cannot execute" / "Permission denied" on temp files, export TMPDIR=~/.tmp first: /tmp in this sandbox is mounted noexec and some toolchains try to run binaries from it.
 
         If a task truly requires a system-level package (daemon, kernel module, a global path), stop and say so: only the server owner can add it, and that needs rebuilding the image. Do not invent workarounds, do not modify anything outside your working directory.
 
