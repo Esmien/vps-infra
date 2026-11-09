@@ -74,6 +74,15 @@ COPY turnstile-gate.js /app/build/static/turnstile-gate.js
 RUN sed -i 's|<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />|&\n\t\t<script src="/static/turnstile-gate.js?v=2" defer crossorigin="use-credentials"></script>|' /app/build/index.html \
  && grep -q "turnstile-gate.js" /app/build/index.html
 
+# 4) Автовыбор персональной песочницы. В 0.13.x выбор терминала хранится только
+#    в localStorage (в БД не пишется, серверной настройки нет), поэтому у нового
+#    пользователя терминал выключен и write_file/панель «Файлы» недоступны.
+#    Скрипт: нет выбора + ровно одна доступная песочница → выбирает её и один
+#    раз перезагружает страницу. Подробности — в самом terminal-autoselect.js.
+COPY terminal-autoselect.js /app/build/static/terminal-autoselect.js
+RUN sed -i 's|<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />|<script src="/static/terminal-autoselect.js?v=1" crossorigin="use-credentials"></script>\n\t\t&|' /app/build/index.html \
+ && grep -q "terminal-autoselect.js" /app/build/index.html
+
 LABEL org.opencontainers.image.title="Esmien AI (derived from Open WebUI)" \
       org.opencontainers.image.description="Open WebUI с кастомным брендингом Esmien AI" \
       org.opencontainers.image.source="https://github.com/open-webui/open-webui"
