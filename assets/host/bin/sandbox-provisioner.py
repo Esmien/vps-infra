@@ -142,10 +142,11 @@ def wait_healthy(name: str, timeout: float = 90.0) -> bool:
 def ensure_dir(path: str) -> None:
     """Рабочий каталог + скрытый TMPDIR. Ничего лишнего в витрине: пользователь
     должен видеть в файловом браузере только свои файлы, без служебных папок."""
-    for target in (path, os.path.join(path, ".tmp")):
+    # .tmp — служебный (скрыт), generated_images — видимая папка под картинки.
+    for target, mode in ((path, 0o700), (os.path.join(path, ".tmp"), 0o700), (os.path.join(path, "generated_images"), 0o700)):
         os.makedirs(target, exist_ok=True)
         os.chown(target, OWNER_UID_GID, OWNER_UID_GID)
-        os.chmod(target, 0o700)
+        os.chmod(target, mode)
 
 
 # ---------------------------------------------------------------- WebUI API
@@ -393,6 +394,8 @@ def reconcile(dry_run: bool, only: str | None) -> int:
         # изменился (пути, лимиты, промпт) — иначе правки шаблона не доезжают до людей.
         if not entry.get("active"):
             continue
+        if not dry_run:
+            ensure_dir(entry["dir"])  # папки могли появиться позже (например generated_images)
         health = container_health(entry["container"])
         if dry_run:
             if not health:

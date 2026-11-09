@@ -55,6 +55,8 @@ services:
 
         If a task truly requires a system-level package (daemon, kernel module, a global path), stop and say so: only the server owner can add it, and that needs rebuilding the image. Do not invent workarounds, do not modify anything outside your working directory.
 
+        Generated images: save every picture you produce (matplotlib, PIL, charts, screenshots you create) into ~/generated_images/ — that is the folder the user looks in. Do not scatter images in the workspace root.
+        Handing files to the user: give the absolute path and tell them to open it in the Files panel. Never write markdown links like [name](path) — there is no HTTP endpoint serving workspace files, so such a link just opens an empty chat.
         Disk: your workspace has a 2 GB budget. Binaries and package directories (~/.local, ~/bin) are excluded from cleanup; working files are deleted oldest-first when the budget is reached, so keep only what matters and clean build artifacts when done.
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS -m 4 http://127.0.0.1:8000/health >/dev/null || exit 1"]
