@@ -37,6 +37,14 @@ services:
       # Файловый браузер стартует в /home/user и показывает ровно одну папку — workspace.
       OPEN_TERMINAL_FILE_BROWSER_ROOT: /home/user
       PATH: /home/user/workspace/.local/bin:/home/user/workspace/bin:/usr/local/bin:/usr/bin:/bin
+      # glibc malloc: те же настройки, что у рут-терминала. Без них при наплыве
+      # параллельных запросов процесс нарезает вторичные арены по 64 МиБ и держит
+      # их до перезапуска (RSS растёт на сотни МБ). Значения читаются загрузчиком
+      # на старте процесса — правка требует пересоздания контейнера.
+      MALLOC_ARENA_MAX: "2"
+      PYTHONMALLOC: malloc
+      MALLOC_TRIM_THRESHOLD_: "131072"
+      MALLOC_MMAP_THRESHOLD_: "131072"
       # Рецепты для моделей. Open WebUI забирает этот текст (GET /system) и подставляет
       # в контекст любой модели, работающей с этим терминалом. Правится здесь, один раз.
       OPEN_TERMINAL_SYSTEM_PROMPT: |
