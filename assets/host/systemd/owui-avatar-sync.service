@@ -1,0 +1,8 @@
+[Unit]
+Description=Sync Open WebUI model avatars into nginx static cache
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/owui-avatar-sync.py
+Nice=10

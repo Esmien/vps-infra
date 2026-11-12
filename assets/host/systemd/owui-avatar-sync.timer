@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic Open WebUI model avatar sync
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+AccuracySec=30s
+Unit=owui-avatar-sync.service
+
+[Install]
+WantedBy=timers.target
