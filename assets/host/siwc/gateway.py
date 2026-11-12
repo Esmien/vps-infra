@@ -170,18 +170,52 @@ def to_chat_payload(resp_obj, model):
     }
 
 
+def _image_part(part):
+    """Превращает image_url-часть chat-формата в input_image для Responses API."""
+    payload = part.get('image_url')
+    if payload is None:
+        payload = part.get('url') or part.get('image')
+    detail = part.get('detail')
+    if isinstance(payload, dict):
+        detail = detail or payload.get('detail')
+        url = payload.get('url')
+    else:
+        url = payload
+    if not isinstance(url, str) or not url:
+        return None
+    entry = {'type': 'input_image', 'image_url': url, 'detail': detail or 'auto'}
+    return entry
+
+
 def convert_messages(messages):
     items = []
     for msg in messages:
         role = msg.get('role')
         content = msg.get('content')
+        images = []
+        text = content
         if isinstance(content, list):
-            content = '\n'.join(p.get('text', '') for p in content if isinstance(p, dict))
+            texts = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                ptype = part.get('type')
+                if ptype in ('text', 'input_text'):
+                    texts.append(part.get('text') or '')
+                elif ptype in ('image_url', 'input_image'):
+                    img = _image_part(part)
+                    if img:
+                        images.append(img)
+            text = '\n'.join(t for t in texts if t)
         if role in ('system', 'developer', 'user'):
-            items.append({'role': 'user' if role == 'user' else 'system', 'content': content or ''})
+            if role == 'user' and images:
+                parts = [{'type': 'input_text', 'text': text or ''}] + images
+                items.append({'role': 'user', 'content': parts})
+            else:
+                items.append({'role': 'user' if role == 'user' else 'system', 'content': text or ''})
         elif role == 'assistant':
-            if content:
-                items.append({'role': 'assistant', 'content': [{'type': 'output_text', 'text': content}]})
+            if text:
+                items.append({'role': 'assistant', 'content': [{'type': 'output_text', 'text': text}]})
             for call in msg.get('tool_calls') or []:
                 fn = call.get('function') or {}
                 items.append({'type': 'function_call', 'call_id': call.get('id'),
@@ -189,7 +223,7 @@ def convert_messages(messages):
         elif role == 'tool':
             items.append({'type': 'function_call_output',
                           'call_id': msg.get('tool_call_id'),
-                          'output': content if isinstance(content, str) else json.dumps(content)})
+                          'output': text if isinstance(text, str) else json.dumps(text)})
     return items
 
 
