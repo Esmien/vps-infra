@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import fcntl
+import stat
 import json
 import os
 import re
@@ -37,7 +39,7 @@ NOTIFY_ENV_PATH = "/home/ai_service/notifications/.env"
 LOCK_PATH = "/run/sandbox-provisioner.lock"
 
 QUOTA_BYTES = 2 * 1024**3
-PROTECTED = {".local", "bin", "venv", ".arduino15", "Arduino"}
+PROTECTED = {".local", "bin", "venv", ".arduino15", "Arduino", ".agents"}
 RETENTION_DAYS = 3
 CONTAINER_PREFIX = "ot-u-"
 CONNECTION_NAME = "Песочница"  # префикс; к нему добавляется часть email до собаки
@@ -147,6 +149,82 @@ def ensure_dir(path: str) -> None:
         os.makedirs(target, exist_ok=True)
         os.chown(target, OWNER_UID_GID, OWNER_UID_GID)
         os.chmod(target, mode)
+
+
+AGENTS_TEMPLATE = """# AGENTS
+
+Системные правила и инструкции администратора модели имеют высший приоритет.
+MEMORY.md содержит важный контекст бесед и проектов; PROFILE.md — сведения о пользователе.
+Сохраняйте и удаляйте воспоминания только через инструмент памяти, если он доступен.
+Перед переносом сведений между файлами спросите пользователя. Не удаляйте данные ради уборки.
+Новые сообщения пользователя имеют приоритет над устаревшими фактами.
+"""
+
+
+def user_system_prompt(uid: str) -> str:
+    # UUID валидируется до SQL-интерполяции; содержимое промпта не попадает в лог.
+    canonical = str(uuid.UUID(uid))
+    if canonical != uid:
+        raise ValueError("invalid user id")
+    query = (
+        "select encode(convert_to(coalesce(settings::jsonb->'ui'->>'system',''),"
+        "'UTF8'),'base64') from \"user\" where id='" + canonical + "' and role='user'"
+    )
+    result = subprocess.run(
+        ["sudo", "-u", "postgres", "psql", "-d", "webui_db", "-tA", "-c", query],
+        capture_output=True, text=True, check=True,
+    )
+    return base64.b64decode(''.join(result.stdout.split()), validate=True).decode('utf-8')
+
+
+def ensure_memory_files(path: str, uid: str) -> None:
+    """Создать отсутствующие файлы, не перезаписывая существующие и не следуя symlink."""
+    root = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        try:
+            os.mkdir('.agents', 0o755, dir_fd=root)
+        except FileExistsError:
+            pass
+        directory = os.open('.agents', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
+        try:
+            if os.fstat(directory).st_uid != 0:
+                raise ValueError('memory directory must be root-owned')
+            for name in ('AGENTS.md', 'MEMORY.md', 'PROFILE.md'):
+                try:
+                    existing = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                except FileNotFoundError:
+                    existing = None
+                if existing is not None:
+                    try:
+                        if not stat.S_ISREG(os.fstat(existing).st_mode):
+                            raise ValueError('memory file is not regular')
+                    finally:
+                        os.close(existing)
+                    continue
+                if name == 'AGENTS.md':
+                    text = AGENTS_TEMPLATE
+                elif name == 'MEMORY.md':
+                    text = '# MEMORY\n\n'
+                else:
+                    prompt = user_system_prompt(uid)
+                    text = '# PROFILE\n\n' + prompt
+                    if len(text) > 5000:
+                        raise ValueError('profile migration exceeds 5000 characters')
+                tmp = '.init-' + uuid.uuid4().hex
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=directory)
+                try:
+                    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+                        stream.write(text)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.link(tmp, name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+                    os.fsync(directory)
+                finally:
+                    os.unlink(tmp, dir_fd=directory)
+        finally:
+            os.close(directory)
+    finally:
+        os.close(root)
 
 
 # ---------------------------------------------------------------- WebUI API
@@ -283,7 +361,7 @@ def enforce_quota(entry: dict, dry_run: bool) -> None:
 
     files: list[tuple[float, str, int]] = []
     for root, dirs, names in os.walk(path):
-        if os.path.dirname(root) == path:
+        if root == path:
             dirs[:] = [d for d in dirs if d not in PROTECTED]
         for name in names:
             full = os.path.join(root, name)
@@ -379,6 +457,7 @@ def reconcile(dry_run: bool, only: str | None) -> int:
                 actions += 1
                 continue
             ensure_dir(entry["dir"])
+            ensure_memory_files(entry["dir"], uid)
             compose(entry, ["up", "-d"])
             if not wait_healthy(entry["container"]):
                 log(f"ОШИБКА {slug}: контейнер не стал healthy, соединение не создаю")
@@ -396,6 +475,7 @@ def reconcile(dry_run: bool, only: str | None) -> int:
             continue
         if not dry_run:
             ensure_dir(entry["dir"])  # папки могли появиться позже (например generated_images)
+            ensure_memory_files(entry["dir"], uid)
         health = container_health(entry["container"])
         if dry_run:
             if not health:
