@@ -157,7 +157,8 @@ AGENTS_TEMPLATE = """# AGENTS
 MEMORY.md содержит важный контекст бесед и проектов; PROFILE.md — сведения о пользователе.
 Сохраняйте и удаляйте воспоминания только через инструмент памяти, если он доступен.
 Перед переносом сведений между файлами спросите пользователя. Не удаляйте данные ради уборки.
-Новые сообщения пользователя имеют приоритет над устаревшими фактами.
+При противоречии сведений MEMORY имеет преимущество над PROFILE; спорные записи не удаляйте наугад.
+Новые явные сообщения пользователя имеют приоритет над устаревшими фактами.
 """
 
 
@@ -208,8 +209,6 @@ def ensure_memory_files(path: str, uid: str) -> None:
                 else:
                     prompt = user_system_prompt(uid)
                     text = '# PROFILE\n\n' + prompt
-                    if len(text) > 5000:
-                        raise ValueError('profile migration exceeds 5000 characters')
                 tmp = '.init-' + uuid.uuid4().hex
                 fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=directory)
                 try:
