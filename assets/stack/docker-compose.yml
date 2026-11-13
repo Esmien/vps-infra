@@ -91,7 +91,7 @@ services:
       # Картинки из Image Generator кладутся в generated_images песочницы
       # пользователя: каталог песочниц rw + state.json провижионера (ro).
       - /home/ai_service/sandbox/users:/sandbox-users
-      - /home/ai_service/sandbox-users/state.json:/sandbox-state/state.json:ro
+      - /home/ai_service/sandbox-users:/sandbox-state:ro
     depends_on:
       litellm:
         condition: service_healthy
