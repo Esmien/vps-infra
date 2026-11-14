@@ -179,6 +179,12 @@ def _norm_lines(text: str) -> str:
     return " ".join(text.split())
 
 
+def _managed_only(text: str) -> bool:
+    """Текст состоит только из строк управляемых шаблонов (старых или текущего)."""
+    known = {_norm_lines(line) for line in (LEGACY_AGENTS_TEXT + "\n" + AGENTS_BODY).splitlines() if line.strip()}
+    return all(_norm_lines(line) in known for line in text.splitlines() if line.strip())
+
+
 def merge_agents_block(existing: str) -> str:
     """Заменить управляемый блок, сохранив собственный текст пользователя."""
     begin = existing.find(AGENTS_BLOCK_BEGIN)
@@ -187,7 +193,7 @@ def merge_agents_block(existing: str) -> str:
         prefix = existing[:begin]
         tail = existing[end + len(AGENTS_BLOCK_END):]
         # Старый управляемый текст, оставшийся перед блоком, не должен жить рядом с новым.
-        if _norm_lines(prefix) in ("", _norm_lines(LEGACY_AGENTS_TEXT)):
+        if not prefix.strip() or _managed_only(prefix):
             prefix = ""
         return prefix + AGENTS_TEMPLATE.rstrip("\n") + tail
     if 'Системные правила и инструкции администратора модели имеют высший приоритет.' in existing:
