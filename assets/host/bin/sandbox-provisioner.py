@@ -431,7 +431,7 @@ def reconcile(dry_run: bool, only: str | None) -> int:
     actions = 0
 
     # 1. Новые пользователи -> контейнер + соединение
-    active_users = {uid: u for uid, u in users.items() if u["role"] == "user"}
+    active_users = {uid: u for uid, u in users.items() if u["role"] in ("user", "admin")}
     for uid, user in active_users.items():
         if only and only.lower() not in (user["email"] or "").lower():
             continue
@@ -493,7 +493,7 @@ def reconcile(dry_run: bool, only: str | None) -> int:
     # 2. Потерявшие право (роль не user) и удалённые пользователи
     for uid, entry in list(state.items()):
         user = users.get(uid)
-        if user and user["role"] == "user":
+        if user and user["role"] in ("user", "admin"):
             continue
         if entry.get("active"):
             if dry_run:

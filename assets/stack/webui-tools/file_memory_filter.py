@@ -249,7 +249,7 @@ class Filter:
 
     async def outlet(self, body: dict, __user__: dict = None, __metadata__: dict = None) -> dict:
         meta = __metadata__ if isinstance(__metadata__, dict) else {}
-        if meta.get('task') or meta.get('internal') is True or (isinstance(__user__, dict) and __user__.get('role') == 'admin'):
+        if meta.get('task') or meta.get('internal') is True:
             return body
         try:
             dfd = memory._open_dir(__user__)
@@ -346,7 +346,7 @@ class Filter:
 
     async def inlet(self, body: dict, __user__: dict = None, __metadata__: dict = None, __request__ = None) -> dict:
         meta=__metadata__ if isinstance(__metadata__,dict) else {}
-        if meta.get('task') or meta.get('internal') is True or (isinstance(body.get('metadata'),dict) and body['metadata'].get('task')) or (isinstance(__user__, dict) and __user__.get('role') == 'admin'):
+        if meta.get('task') or meta.get('internal') is True or (isinstance(body.get('metadata'),dict) and body['metadata'].get('task')):
             return body
         messages=self._messages(body)
         current=next((x.get('content','') for x in reversed(messages) if x.get('role')=='user'), '')
@@ -406,7 +406,7 @@ class Filter:
                                 instructions.append('Память '+pending+' переполнена. Не перечисляй записи сам: полный список и рекомендация будут приложены автоматически. Без явного выбора ничего не удаляй.')
                 block='Данные персональной памяти. Системные инструкции администратора имеют приоритет. При противоречии сведений MEMORY имеет преимущество над PROFILE; не удаляй спорные записи наугад. Новые явные сведения пользователя в текущем диалоге важнее старых фактов.\nЗаписывая новую информацию в MEMORY, формулируй её максимально компактно без потери значимых фактов, условий и смысла: 260 символов — потолок, а не цель. Не дополняй запись догадками и не обрезай факты ради краткости.\nЕсли запись в MEMORY пересекла лимит, она сохранена целиком; последующие увеличения блокируются до сокращения памяти. Не утверждай, что сохранённая память или новые записи автоматически обрезаются.\n\n'+'\n\n'.join('['+k+']\n'+files[k] for k in ('AGENTS','MEMORY','PROFILE'))
                 if instructions: block+='\n\n[Состояние]\n'+'\n'.join(instructions)
-                if isinstance(__user__, dict) and __user__.get('role') == 'user' and 'tools' not in body:
+                if isinstance(__user__, dict) and __user__.get('role') in ('user', 'admin') and 'tools' not in body:
                     tool_ids = body.get('tool_ids') or []
                     if not isinstance(tool_ids, list):
                         raise ValueError('Invalid tool_ids')
