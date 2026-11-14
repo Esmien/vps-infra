@@ -10,6 +10,7 @@ import memory_tool as memory
 BEGIN = '\n\n<!-- owui-memory-38b88eaf-begin -->'
 END = '<!-- owui-memory-38b88eaf-end -->'
 WARNING = '🔴 ВНИМАНИЕ: персональная память сейчас недоступна; отвечаю без неё.'
+MEMORY_LIMIT = 10000
 FULL_WARNING = '🔴 ВНИМАНИЕ: память MEMORY переполнена. Выберите записи для удаления; без вашего выбора ничего не удаляется.'
 
 class Filter:
@@ -312,7 +313,7 @@ class Filter:
                 source = 'MEMORY' if item['id'].startswith('M') else 'PROFILE'
                 if not target or target == source or target == 'AGENTS':
                     continue
-                if target == 'MEMORY' and (len(item['text']) > 260 or len(files['MEMORY']) + len(item['text']) + 2 > 5000):
+                if target == 'MEMORY' and (len(item['text']) > 260 or len(files['MEMORY']) + len(item['text']) + 2 > MEMORY_LIMIT):
                     continue
                 current = memory.operate(user, 'list', source)['entries']
                 if item['text'] not in current:
@@ -356,7 +357,7 @@ class Filter:
                     memory._records(text, key)
                 if any(BEGIN in v or END in v for v in files.values()): raise ValueError('Memory delimiter collision')
                 state=memory._load_state(dfd)
-                if len(files['MEMORY']) > 5000 and 'MEMORY' not in state['overflow']:
+                if len(files['MEMORY']) > MEMORY_LIMIT and 'MEMORY' not in state['overflow']:
                     state['overflow']['MEMORY']={'stage':'offer'}
                     memory._save_state(dfd,state)
                 pending=next(iter(state['overflow']),None)

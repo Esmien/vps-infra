@@ -9,7 +9,7 @@ STATE = '/sandbox-state/state.json'
 ROOT = '/sandbox-users'
 HOST_ROOT = '/home/ai_service/sandbox/users'
 FILES = {'MEMORY': 'MEMORY.md', 'PROFILE': 'PROFILE.md', 'AGENTS': 'AGENTS.md'}
-LIMIT = 5000
+LIMIT = 10000
 
 class MemoryErrorSafe(Exception):
     pass
