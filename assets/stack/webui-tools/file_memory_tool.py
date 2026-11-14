@@ -66,7 +66,7 @@ def _records(text, name):
     if not text.startswith(prefix):
         raise MemoryErrorSafe('Неизвестный формат файла памяти')
     body = text[len(prefix):]
-    spans = list(re.finditer(r'[^\n]+(?:\n(?!\n)[^\n]+)*', body))
+    spans = [span for span in re.finditer(r'[^\n]+(?:\n(?!\n)[^\n]+)*', body) if not span.group().startswith('## ')]
     return prefix, body, spans
 
 def _store(dfd, name, text):
@@ -135,14 +135,15 @@ def operate(user, action, name, value='', selected=None):
             new_body = body
             for idx in sorted(indices, reverse=True):
                 m = spans[idx]
-                if action == 'replace':
-                    new_body = new_body[:m.start()] + value + new_body[m.end():]
-                else:
-                    end = m.end()
-                    while end < len(new_body) and new_body[end] == '\n':
-                        end += 1
-                    new_body = new_body[:m.start()] + new_body[end:]
-            new = prefix + new_body
+                end = m.end()
+                while end < len(new_body) and new_body[end] == '\n':
+                    end += 1
+                new_body = new_body[:m.start()] + new_body[end:]
+            new_body = new_body.rstrip('\n')
+            if action == 'replace':
+                # Правка — это новая запись плюс удаление старой, а не правка текста на месте.
+                new_body = (new_body + '\n\n' if new_body else '') + value
+            new = prefix + new_body + ('\n' if new_body else '')
         limited = name == 'MEMORY'
         if limited and len(text) >= LIMIT and len(new) > len(text):
             state = _load_state(dfd)
