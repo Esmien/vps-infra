@@ -1,6 +1,6 @@
 services:
   litellm:
-    image: ghcr.io/berriai/litellm:v1.106.6   # was main-latest (rolling dev tag); pinned to newest stable release 2026-10-28 (chatgpt/ subscription provider needs >=1.106)
+    image: ghcr.io/berriai/litellm:v1.108.8   # LTS-линия (тег :lts указывает сюда же). Пиновка 2026-11-14: 1.106.6 -> 1.108.8, схема БД аддитивная (+4 таблицы); откат образом ghcr.io/berriai/litellm:rollback-1.106.6
     container_name: litellm
     restart: always
     command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
