@@ -176,6 +176,31 @@ services:
     networks:
       - stack-net
 
+  # Headless Chromium для загрузки страниц: WebUI ходит сюда по WS и рендерит JS.
+  # Версия образа должна совпадать с python-пакетом playwright в образе WebUI.
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.60.0-noble
+    container_name: playwright
+    restart: always
+    command: ["/bin/sh", "-c", "npx -y playwright@1.60.0 run-server --host 0.0.0.0 --port 3000"]
+    ipc: host
+    environment:
+      # Браузер живёт в контейнере: права и sandbox отключены только внутри него.
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const net=require('net');const s=net.connect(3000,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - stack-net
+
   litellm-redis:
     image: redis:7-alpine
     container_name: litellm-redis
