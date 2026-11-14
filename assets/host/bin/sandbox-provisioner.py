@@ -166,12 +166,30 @@ MEMORY.md содержит важный контекст бесед и прое�
 AGENTS_TEMPLATE = AGENTS_BLOCK_BEGIN + "\n" + AGENTS_BODY + AGENTS_BLOCK_END + "\n"
 
 
+LEGACY_AGENTS_TEXT = """# AGENTS
+
+Системные правила и инструкции администратора модели имеют высший приоритет.
+MEMORY.md содержит важный контекст бесед и проектов; PROFILE.md — сведения о пользователе.
+Сохраняйте и удаляйте воспоминания только через инструмент памяти, если он доступен.
+Перед переносом сведений между файлами спросите пользователя. Не удаляйте данные ради уборки.
+Новые сообщения пользователя имеют приоритет над устаревшими фактами."""
+
+
+def _norm_lines(text: str) -> str:
+    return " ".join(text.split())
+
+
 def merge_agents_block(existing: str) -> str:
     """Заменить управляемый блок, сохранив собственный текст пользователя."""
     begin = existing.find(AGENTS_BLOCK_BEGIN)
     end = existing.find(AGENTS_BLOCK_END)
     if begin != -1 and end > begin:
-        return existing[:begin] + AGENTS_TEMPLATE.rstrip("\n") + existing[end + len(AGENTS_BLOCK_END):]
+        prefix = existing[:begin]
+        tail = existing[end + len(AGENTS_BLOCK_END):]
+        # Старый управляемый текст, оставшийся перед блоком, не должен жить рядом с новым.
+        if _norm_lines(prefix) in ("", _norm_lines(LEGACY_AGENTS_TEXT)):
+            prefix = ""
+        return prefix + AGENTS_TEMPLATE.rstrip("\n") + tail
     if 'Системные правила и инструкции администратора модели имеют высший приоритет.' in existing:
         # Прежний управляемый текст без маркеров: целиком заменяется новым блоком.
         return AGENTS_TEMPLATE
