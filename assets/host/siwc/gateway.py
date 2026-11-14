@@ -116,7 +116,41 @@ def sse_events(resp):
 
 
 FAILED_EVENTS = ('response.failed', 'error')
-PREAMBLE_EVENTS = ('response.created', 'response.in_progress', 'response.queued')
+# События, которые не несут пользовательского вывода: копим поток, пока не начнётся текст,
+# чтобы поймать квоту, приходящую уже после response.created/output_item.added.
+QUIET_EVENTS = ('response.created', 'response.in_progress', 'response.queued',
+                'response.output_item.added', 'response.content_part.added',
+                'response.reasoning_summary_part.added')
+PEEK_EVENT_LIMIT = 60
+FAKE_QUOTA = os.environ.get('SIWC_FAKE_QUOTA') == '1'
+
+
+class FakeResp:
+    """Подмена ответа апстрима для учебного прогона квоты (SIWC_FAKE_QUOTA=1)."""
+
+    def __init__(self, lines):
+        self.status = 200
+        self._lines = lines
+
+    def __iter__(self):
+        return iter(self._lines)
+
+    def read(self):
+        return b''.join(self._lines)
+
+
+def fake_quota_resp():
+    evs = [
+        {'type': 'response.created', 'response': {'id': 'resp_fake', 'status': 'in_progress'}},
+        {'type': 'response.in_progress', 'response': {'id': 'resp_fake'}},
+        {'type': 'response.output_item.added',
+         'item': {'id': 'msg_fake', 'type': 'message', 'role': 'assistant'}},
+        {'type': 'response.failed', 'response': {'id': 'resp_fake', 'status': 'failed',
+         'error': {'code': 'usage_limit_reached',
+                   'message': 'The ChatGPT user has reached their Subscription Sharing usage limit. '
+                              'Ask the user to try again after their usage limit resets or use an API key instead.'}}},
+    ]
+    return FakeResp([('data: ' + json.dumps(e) + '\n\n').encode() for e in evs])
 
 
 def event_error_payload(ev):
@@ -389,6 +423,8 @@ class Handler(BaseHTTPRequestHandler):
                 conn, resp = upstream('POST', '/v1/responses', body, token=access_token(force=True))
             except Exception:
                 return self.err(502, 'auth refresh failed')
+        if FAKE_QUOTA:
+            resp = fake_quota_resp()
         if resp.status != 200:
             raw = resp.read()
             return self.relay_error(resp.status, raw)
@@ -409,6 +445,7 @@ class Handler(BaseHTTPRequestHandler):
         head = []
         first = None
         seen = 0
+        peek_types = []
         for raw in resp:
             head.append(raw)
             line = raw.decode('utf-8', 'ignore').strip()
@@ -421,16 +458,18 @@ class Handler(BaseHTTPRequestHandler):
                         ev = None
                     if isinstance(ev, dict) and ev.get('type'):
                         seen += 1
+                        peek_types.append(ev['type'])
                         if ev['type'] in FAILED_EVENTS:
                             first = ev
                             break
-                        if ev['type'] not in PREAMBLE_EVENTS or seen >= 8:
+                        if ev['type'] not in QUIET_EVENTS or seen >= PEEK_EVENT_LIMIT:
                             break
         if first is not None and first.get('type') in FAILED_EVENTS:
             conn.close()
             log('responses failed before stream:', first.get('type'),
                 str(event_error_payload(first)['error'].get('message'))[:120])
             return self.relay_error(400, json.dumps(event_error_payload(first)).encode())
+        log('peek types:', ','.join(peek_types))
 
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
@@ -498,6 +537,8 @@ class Handler(BaseHTTPRequestHandler):
                                       token=access_token(force=True))
             except Exception:
                 return self.err(502, 'auth refresh failed')
+        if FAKE_QUOTA:
+            resp = fake_quota_resp()
         if resp.status != 200:
             raw = resp.read()
             conn.close()
@@ -522,7 +563,7 @@ class Handler(BaseHTTPRequestHandler):
                 failed = ev
                 break
             pre.append(ev)
-            if t not in PREAMBLE_EVENTS or len(pre) >= 8:
+            if t not in QUIET_EVENTS or len(pre) >= PEEK_EVENT_LIMIT:
                 break
         if failed is not None:
             conn.close()
