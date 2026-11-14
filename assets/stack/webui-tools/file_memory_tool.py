@@ -123,13 +123,18 @@ def _load_state(dfd):
 def _save_state(dfd, state):
     _store(dfd, '.memory-state.json', json.dumps(state, ensure_ascii=False, sort_keys=True))
 
-def _check_entry(name, value):
-    if not isinstance(value, str) or not value.strip() or value != value.strip() or '\n\n' in value or '\r' in value:
-        raise MemoryErrorSafe('Нужна одна непустая запись без пустых строк')
+RECORD_FORMAT = re.compile(r'- \*\*[^*\n]{1,80}\*\*\s+\S.*')
+
+
+def _check_entry(name, value, strict=True):
+    if not isinstance(value, str) or not value.strip() or value != value.strip() or '\n' in value or '\r' in value:
+        raise MemoryErrorSafe('Нужна одна непустая запись в одну строку, без переносов и пустых строк')
+    if strict and not RECORD_FORMAT.fullmatch(value):
+        raise MemoryErrorSafe('Запись оформляется пунктом Markdown: "- **Ключ:** текст"')
     if name == 'MEMORY' and len(value) > RECORD_LIMIT:
         raise MemoryErrorSafe(f'Запись превышает {RECORD_LIMIT} символов')
 
-def operate(user, action, name, value='', selected=None):
+def operate(user, action, name, value='', selected=None, strict=True):
     if name not in FILES:
         raise MemoryErrorSafe('Неизвестный файл')
     if action not in ('list', 'append', 'delete', 'replace'):
@@ -142,7 +147,7 @@ def operate(user, action, name, value='', selected=None):
         if action == 'list':
             return {'ok': True, 'entries': entries, 'characters': len(text), 'limit': LIMIT if name == 'MEMORY' else None}
         if action in ('append', 'replace'):
-            _check_entry(name, value)
+            _check_entry(name, value, strict)
         if action == 'append':
             new = text + ('' if not body else ('\n' if text.endswith('\n') else '\n\n')) + value + '\n'
         else:
@@ -195,7 +200,7 @@ def operate(user, action, name, value='', selected=None):
 
 class Tools:
     def memory(self, action: str, file: str, value: str = '', selected: list[dict] | None = None, __user__: dict = None) -> dict:
-        """Read or update personal memory. action: list, append, delete, replace. file: AGENTS, MEMORY or PROFILE. For delete/replace pass selected as [{"number": 1, "text": "exact current text"}]."""
+        """Read or update personal memory. action: list, append, delete, replace. file: AGENTS, MEMORY or PROFILE. Each value must be one single-line markdown bullet with a bold key, e.g. "- **Key:** text". For delete/replace pass selected as [{"number": 1, "text": "exact current text"}]."""
         try:
             return operate(__user__, action, file, value, selected)
         except MemoryErrorSafe as exc:

@@ -320,7 +320,7 @@ class Filter:
                     continue
                 number = current.index(item['text']) + 1
                 try:
-                    memory.operate(user, 'append', target, item['text'])
+                    memory.operate(user, 'append', target, item['text'], strict=False)
                     memory.operate(user, 'delete', source, selected=[{'number': number, 'text': item['text']}])
                 except Exception:
                     continue

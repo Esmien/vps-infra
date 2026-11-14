@@ -196,6 +196,13 @@ for f in "${HOST_UNITS[@]}"; do
     [[ -f "/etc/systemd/system/$f" ]] && install -m 644 -D "/etc/systemd/system/$f" "$REPO_DIR/host/systemd/$f"
 done
 
+# drop-in'ы: фактическое расписание таймеров живёт здесь, а не в базовом unit
+for d in /etc/systemd/system/*.timer.d; do
+    [[ -d "$d" ]] || continue
+    [[ -f "$d/override.conf" ]] || continue
+    install -m 644 -D "$d/override.conf" "$REPO_DIR/host/systemd/$(basename "$d")/override.conf"
+done
+
 HOST_ETC=(docker-autorecover.conf hermes-boot-expected-containers.txt)
 for f in "${HOST_ETC[@]}"; do
     [[ -f "/etc/$f" ]] && install -m 644 -D "/etc/$f" "$REPO_DIR/host/etc/$f"
