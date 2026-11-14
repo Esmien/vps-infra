@@ -116,12 +116,12 @@ def sse_events(resp):
 
 
 FAILED_EVENTS = ('response.failed', 'error')
-# События, которые не несут пользовательского вывода: копим поток, пока не начнётся текст,
-# чтобы поймать квоту, приходящую уже после response.created/output_item.added.
-QUIET_EVENTS = ('response.created', 'response.in_progress', 'response.queued',
-                'response.output_item.added', 'response.content_part.added',
-                'response.reasoning_summary_part.added')
-PEEK_EVENT_LIMIT = 60
+PEEK_EVENT_LIMIT = 200
+OUTPUT_EVENTS = ('response.output_item.done', 'response.completed', 'response.incomplete')
+
+# Реальные последовательности до отказа: created → in_progress → metadata → failed
+# (никаких «известных» событий между ними), поэтому копим любой не-вывод, пока не
+# начнётся дельта/готовый item/терминал. Только тогда отдаём 200.
 FAKE_QUOTA = os.environ.get('SIWC_FAKE_QUOTA') == '1'
 
 
@@ -143,8 +143,7 @@ def fake_quota_resp():
     evs = [
         {'type': 'response.created', 'response': {'id': 'resp_fake', 'status': 'in_progress'}},
         {'type': 'response.in_progress', 'response': {'id': 'resp_fake'}},
-        {'type': 'response.output_item.added',
-         'item': {'id': 'msg_fake', 'type': 'message', 'role': 'assistant'}},
+        {'type': 'response.metadata', 'response': {'id': 'resp_fake'}},
         {'type': 'response.failed', 'response': {'id': 'resp_fake', 'status': 'failed',
          'error': {'code': 'usage_limit_reached',
                    'message': 'The ChatGPT user has reached their Subscription Sharing usage limit. '
@@ -462,7 +461,9 @@ class Handler(BaseHTTPRequestHandler):
                         if ev['type'] in FAILED_EVENTS:
                             first = ev
                             break
-                        if ev['type'] not in QUIET_EVENTS or seen >= PEEK_EVENT_LIMIT:
+                        if ev['type'].endswith('.delta') or ev['type'] in OUTPUT_EVENTS:
+                            break
+                        if seen >= PEEK_EVENT_LIMIT:
                             break
         if first is not None and first.get('type') in FAILED_EVENTS:
             conn.close()
@@ -563,7 +564,7 @@ class Handler(BaseHTTPRequestHandler):
                 failed = ev
                 break
             pre.append(ev)
-            if t not in QUIET_EVENTS or len(pre) >= PEEK_EVENT_LIMIT:
+            if t.endswith('.delta') or t in OUTPUT_EVENTS or len(pre) >= PEEK_EVENT_LIMIT:
                 break
         if failed is not None:
             conn.close()
