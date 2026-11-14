@@ -172,6 +172,7 @@ HOST_BIN=(
     fw-guard-postgres.sh
     hermes-history-backup.py
     secrets-offsite-backup.py
+    ai-memory-backup.sh
 )
 for f in "${HOST_BIN[@]}"; do
     [[ -f "/usr/local/bin/$f" ]] && install -m 700 -D "/usr/local/bin/$f" "$REPO_DIR/host/bin/$f"
@@ -189,6 +190,7 @@ HOST_UNITS=(
     webui-data-backup.service webui-data-backup.timer
     hermes-history-backup.service hermes-history-backup.timer
     secrets-offsite-backup.service secrets-offsite-backup.timer
+    ai-memory-backup.service ai-memory-backup.timer
 )
 for f in "${HOST_UNITS[@]}"; do
     [[ -f "/etc/systemd/system/$f" ]] && install -m 644 -D "/etc/systemd/system/$f" "$REPO_DIR/host/systemd/$f"
