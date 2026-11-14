@@ -153,9 +153,7 @@ def ensure_dir(path: str) -> None:
 
 AGENTS_BLOCK_BEGIN = "<!-- managed:begin -->"
 AGENTS_BLOCK_END = "<!-- managed:end -->"
-AGENTS_BODY = """# AGENTS
-
-Системные правила и инструкции администратора модели имеют высший приоритет.
+AGENTS_BODY = """Системные правила и инструкции администратора модели имеют высший приоритет.
 MEMORY.md содержит важный контекст бесед и проектов; PROFILE.md — сведения о пользователе.
 Сохраняйте и удаляйте воспоминания только через инструмент памяти, если он доступен.
 Перед переносом сведений между файлами спросите пользователя. Не удаляйте данные ради уборки.
@@ -164,6 +162,7 @@ MEMORY.md содержит важный контекст бесед и прое�
 Показывая записи памяти в чате, выводите их дословно, байт в байт, по одной записи в строке и с нумерацией: 1. <запись>, 2. <запись>. Не пересказывайте, не сокращайте, не объединяйте, не переставляйте и не дополняйте записи. Если точный список уже вывел фильтр памяти, не дублируйте его: используйте только его тексты и номера.
 """
 AGENTS_TEMPLATE = AGENTS_BLOCK_BEGIN + "\n" + AGENTS_BODY + AGENTS_BLOCK_END + "\n"
+AGENTS_HEADER = "# AGENTS\n\n"
 
 
 LEGACY_AGENTS_TEXT = """# AGENTS
@@ -187,20 +186,25 @@ def _managed_only(text: str) -> bool:
 
 def merge_agents_block(existing: str) -> str:
     """Заменить управляемый блок, сохранив собственный текст пользователя."""
+    def strip_header(text: str) -> str:
+        lines = [line for line in text.splitlines() if line.strip() != '# AGENTS']
+        return "\n".join(lines).strip("\n")
+
     begin = existing.find(AGENTS_BLOCK_BEGIN)
     end = existing.find(AGENTS_BLOCK_END)
     if begin != -1 and end > begin:
-        prefix = existing[:begin]
+        prefix = strip_header(existing[:begin])
         tail = existing[end + len(AGENTS_BLOCK_END):]
         # Старый управляемый текст, оставшийся перед блоком, не должен жить рядом с новым.
         if not prefix.strip() or _managed_only(prefix):
             prefix = ""
-        return prefix + AGENTS_TEMPLATE.rstrip("\n") + tail
+        head = AGENTS_HEADER + (prefix.strip("\n") + "\n\n" if prefix.strip() else "")
+        return head + AGENTS_TEMPLATE.rstrip("\n") + tail
     if 'Системные правила и инструкции администратора модели имеют высший приоритет.' in existing:
         # Прежний управляемый текст без маркеров: целиком заменяется новым блоком.
-        return AGENTS_TEMPLATE
-    body = existing.rstrip("\n")
-    return (body + "\n\n" if body else "") + AGENTS_TEMPLATE
+        return AGENTS_HEADER + AGENTS_TEMPLATE
+    body = strip_header(existing)
+    return AGENTS_HEADER + (body + "\n\n" if body else "") + AGENTS_TEMPLATE
 
 
 def user_system_prompt(uid: str) -> str:
