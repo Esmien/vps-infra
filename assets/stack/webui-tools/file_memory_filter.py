@@ -19,7 +19,7 @@ class Filter:
         decision_model: str = 'perplexity/pplx-decider-v1.2'
         decision_key: str = Field(default='', json_schema_extra={'type': 'password'})
         timeout: int = 15
-        tool_id: str = 'file_memory_pilot_tool'
+        tool_id: str = 'file_memory_tool'
         classifier_url: str = 'http://litellm:4000/v1/chat/completions'
         classifier_model: str = 'service.openrouter/gpt-6.1-terra'
         classifier_key: str = Field(default='', json_schema_extra={'type': 'password'})
