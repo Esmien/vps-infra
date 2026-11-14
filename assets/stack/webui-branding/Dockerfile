@@ -70,18 +70,25 @@ COPY --from=assets /branding/out/ /app/build/static/
 
 # 3) Turnstile-гейт регистрации: JS-файл + тег в index.html. Скрипт сам решает,
 #    показывать виджет или нет (если ключи не заданы — молчит).
+#    ВАЖНО: /static/* отдаётся из /app/backend/open_webui/static (Python-слой),
+#    а /app/build/static — это каталог сборки SPA; копия нужна в ОБА.
 COPY turnstile-gate.js /app/build/static/turnstile-gate.js
+COPY turnstile-gate.js /app/backend/open_webui/static/turnstile-gate.js
 RUN sed -i 's|<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />|&\n\t\t<script src="/static/turnstile-gate.js?v=2" defer crossorigin="use-credentials"></script>|' /app/build/index.html \
  && grep -q "turnstile-gate.js" /app/build/index.html
 
 # 4) Автовыбор персональной песочницы. В 0.13.x выбор терминала хранится только
 #    в localStorage (в БД не пишется, серверной настройки нет), поэтому у нового
 #    пользователя терминал выключен и write_file/панель «Файлы» недоступны.
-#    Скрипт: нет выбора + ровно одна доступная песочница → выбирает её и один
-#    раз перезагружает страницу. Подробности — в самом terminal-autoselect.js.
+#    Скрипт: нет выбора → берёт ЛИЧНУЮ песочницу (url `ot-u-<slug>`), иначе
+#    единственную доступную, и один раз перезагружает страницу.
+#    Подробности — в самом terminal-autoselect.js.
+#    Копия обязательна в /app/backend/open_webui/static — именно оттуда
+#    отдаётся /static/*.
 COPY terminal-autoselect.js /app/build/static/terminal-autoselect.js
-RUN sed -i 's|<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />|<script src="/static/terminal-autoselect.js?v=1" crossorigin="use-credentials"></script>\n\t\t&|' /app/build/index.html \
- && grep -q "terminal-autoselect.js" /app/build/index.html
+COPY terminal-autoselect.js /app/backend/open_webui/static/terminal-autoselect.js
+RUN sed -i 's|<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />|<script src="/static/terminal-autoselect.js?v=2" crossorigin="use-credentials"></script>\n\t\t&|' /app/build/index.html \
+ && grep -q "terminal-autoselect.js?v=2" /app/build/index.html
 
 LABEL org.opencontainers.image.title="Esmien AI (derived from Open WebUI)" \
       org.opencontainers.image.description="Open WebUI с кастомным брендингом Esmien AI" \
