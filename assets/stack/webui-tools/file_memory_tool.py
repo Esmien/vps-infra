@@ -61,12 +61,37 @@ def _read(dfd, name):
     finally:
         os.close(fd)
 
+class _Span:
+    def __init__(self, text, start):
+        self._text = text
+        self._start = start
+        self._end = start + len(text)
+    def group(self):
+        return self._text
+    def start(self):
+        return self._start
+    def end(self):
+        return self._end
+
 def _records(text, name):
     prefix = '# ' + name + '\n\n'
     if not text.startswith(prefix):
         raise MemoryErrorSafe('Неизвестный формат файла памяти')
     body = text[len(prefix):]
-    spans = [span for span in re.finditer(r'[^\n]+(?:\n(?!\n)[^\n]+)*', body) if not span.group().startswith('## ')]
+    spans = []
+    for block in re.finditer(r'[^\n]+(?:\n(?!\n)[^\n]+)*', body):
+        chunk = block.group()
+        if chunk.startswith(('## ', '<!--')):
+            continue
+        if chunk.startswith('- '):
+            # Пункт списка — отдельная запись, даже если пункты идут подряд.
+            offset = block.start()
+            for line in chunk.splitlines():
+                if line.startswith('- '):
+                    spans.append(_Span(line, offset))
+                offset += len(line) + 1
+            continue
+        spans.append(_Span(chunk, block.start()))
     return prefix, body, spans
 
 def _store(dfd, name, text):
