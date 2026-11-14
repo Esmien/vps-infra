@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily snapshot of users' .agents memory files to private repo users_ai_memory
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/ai-memory-backup.sh
+TimeoutStartSec=900
+Nice=10
+StandardOutput=journal
+StandardError=journal

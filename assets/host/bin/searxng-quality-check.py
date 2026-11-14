@@ -11,8 +11,10 @@ healthcheck, docker-incident-detector и LiteLLM-watchdog зелёные даж�
      и не меньше SQ_MIN_ENGINES разных движков.
 Плюс состояние контейнера searxng: если он не running — тревога сразу.
 
-Алерт после SQ_FAILS подряд неудачных прогонов (по умолчанию 2 = ~1 час),
-повтор не чаще SQ_REALERT (6 ч), плюс сообщение о восстановлении.
+Тревога — только при полном отказе (контейнер лежит или ноль результатов по всем
+запросам) после SQ_FAILS подряд (по умолчанию 2 = ~1 час), повтор не чаще SQ_REALERT
+(6 ч), плюс сообщение о восстановлении. Деградация (мало результатов, часть движков
+молчит) пишется в лог и не уходит в Telegram.
 
 CLI: --no-send (только лог), --test (реальная отправка с пометкой «тест»).
 """
@@ -140,6 +142,7 @@ def main() -> int:
     cstate = container_state()
     reasons = []
     lines = []
+    total_results = 0
 
     if not cstate.startswith("running"):
         reasons.append(f"контейнер searxng: {cstate}")
@@ -148,6 +151,7 @@ def main() -> int:
     else:
         for engine, query, need in PROBES:
             count, engines, trouble = probe(engine, query)
+            total_results += count
             label = engine or "общий поиск"
             lines.append(
                 f"{label}: {count} рез. (нужно ≥{need})"
@@ -163,7 +167,10 @@ def main() -> int:
                 reasons.append(f"{label}: {count} результатов, нужно ≥{need}")
 
     ok = not reasons
-    log(("OK " if ok else "FAIL ") + "; ".join(lines))
+    # Тревога только при полном отказе: контейнер лежит или ни одного результата ни по одному запросу.
+    # Деградация (мало результатов, часть движков молчит) остаётся в логе и в метрике, но в TG не идёт.
+    dead = (not cstate.startswith("running")) or total_results == 0
+    log(("OK " if ok else ("DEAD " if dead else "DEGRADED ")) + "; ".join(lines))
 
     if ok:
         if alerted:
@@ -175,15 +182,21 @@ def main() -> int:
         write_state(state)
         return 0
 
+    if not dead:
+        # деградация (мало результатов, один движок молчит) — только в лог, без тревоги
+        state.update({"fails": 0, "last_fail": now})
+        write_state(state)
+        return 1
+
     fails += 1
     state.update({"fails": fails, "last_fail": now})
     if fails >= FAILS_TO_ALERT:
         last_alert = float(state.get("last_alert") or 0)
         if not alerted or now - last_alert > REALERT_S:
             body = (
-                ("🧪 ТЕСТ\n" if TEST else "⚠️ Поиск деградировал.\n\n")
+                ("🧪 ТЕСТ\n" if TEST else "🔴 Поиск не работает совсем.\n\n")
                 + "что не так:\n- "
-                + "\n- ".join(reasons)
+                + "\n- ".join(reasons or ["ни одного результата ни по одному запросу"])
                 + "\n\nзамеры:\n- "
                 + "\n- ".join(lines)
                 + f"\n\nконтейнер: {cstate}"
