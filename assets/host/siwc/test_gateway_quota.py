@@ -59,7 +59,9 @@ def run(method, events, payload, status=200):
 
 
 cases = [
-    ("responses stream, quota", 'handle_responses', [QUOTA],
+    ("responses stream, quota first", 'handle_responses', [QUOTA],
+     {'model': 'gpt-6.1-terra', 'stream': True}, 200, 429),
+    ("responses stream, quota after preamble", 'handle_responses', [CREATED, QUOTA],
      {'model': 'gpt-6.1-terra', 'stream': True}, 200, 429),
     ("responses stream, normal", 'handle_responses', [CREATED, DELTA, DONE],
      {'model': 'gpt-6.1-terra', 'stream': True}, 200, 200),
@@ -67,12 +69,16 @@ cases = [
      {'model': 'gpt-6.1-terra'}, 200, 429),
     ("responses stream, plain fail", 'handle_responses', [PLAIN_FAIL],
      {'model': 'gpt-6.1-terra', 'stream': True}, 200, 400),
-    ("chat stream, quota", 'handle_chat', [QUOTA],
+    ("chat stream, quota first", 'handle_chat', [QUOTA],
+     {'model': 'gpt-6.1-terra', 'stream': True, 'messages': [{'role': 'user', 'content': 'x'}]}, 200, 429),
+    ("chat stream, quota after preamble", 'handle_chat', [CREATED, QUOTA],
      {'model': 'gpt-6.1-terra', 'stream': True, 'messages': [{'role': 'user', 'content': 'x'}]}, 200, 429),
     ("chat stream, normal", 'handle_chat', [CREATED, DELTA, DONE],
      {'model': 'gpt-6.1-terra', 'stream': True, 'messages': [{'role': 'user', 'content': 'x'}]}, 200, 200),
     ("chat sync, quota", 'handle_chat', [QUOTA],
      {'model': 'gpt-6.1-terra', 'messages': [{'role': 'user', 'content': 'x'}]}, 200, 429),
+    ("chat stream, fail after content", 'handle_chat', [CREATED, DELTA, QUOTA],
+     {'model': 'gpt-6.1-terra', 'stream': True, 'messages': [{'role': 'user', 'content': 'x'}]}, 200, 200),
     ("responses http 429 passthrough", 'handle_responses', [],
      {'model': 'gpt-6.1-terra', 'stream': True}, 429, 429),
 ]

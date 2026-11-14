@@ -116,6 +116,7 @@ def sse_events(resp):
 
 
 FAILED_EVENTS = ('response.failed', 'error')
+PREAMBLE_EVENTS = ('response.created', 'response.in_progress', 'response.queued')
 
 
 def event_error_payload(ev):
@@ -402,9 +403,12 @@ class Handler(BaseHTTPRequestHandler):
 
         # Первое событие читаем ДО отправки 200: исчерпанная квота приходит не HTTP-кодом,
         # а событием response.failed внутри потока. Отдав её как 200, мы лишаем LiteLLM
-        # ретрая и перехода на order-2 (он видит только BadRequestError).
+        # ретрая и перехода на order-2 (он видит только BadRequestError). Ошибка может идти
+        # и после preamble (response.created/in_progress), поэтому ждём первое событие с
+        # содержанием, а не буквально первое.
         head = []
         first = None
+        seen = 0
         for raw in resp:
             head.append(raw)
             line = raw.decode('utf-8', 'ignore').strip()
@@ -416,11 +420,16 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:
                         ev = None
                     if isinstance(ev, dict) and ev.get('type'):
-                        first = ev
-                        break
+                        seen += 1
+                        if ev['type'] in FAILED_EVENTS:
+                            first = ev
+                            break
+                        if ev['type'] not in PREAMBLE_EVENTS or seen >= 8:
+                            break
         if first is not None and first.get('type') in FAILED_EVENTS:
             conn.close()
-            log('responses failed before stream:', first.get('type'))
+            log('responses failed before stream:', first.get('type'),
+                str(event_error_payload(first)['error'].get('message'))[:120])
             return self.relay_error(400, json.dumps(event_error_payload(first)).encode())
 
         self.send_response(200)
@@ -451,6 +460,9 @@ class Handler(BaseHTTPRequestHandler):
                                 last_id = (ev.get('response') or {}).get('id')
                             if t in ('response.completed', 'response.incomplete', 'response.failed'):
                                 terminal_seen = True
+                                if t in FAILED_EVENTS:
+                                    log('WARN upstream failed mid-stream:',
+                                        str(event_error_payload(ev)['error'].get('message'))[:120])
                 self.wfile.write(raw)
             if not terminal_seen:
                 # Upstream hung up without a terminal event. LiteLLM (and most
@@ -499,14 +511,24 @@ class Handler(BaseHTTPRequestHandler):
                     400, json.dumps(event_error_payload({'response': obj})).encode())
             return self.json_out(200, to_chat_payload(obj, model))
 
-        # Квота подписки приходит событием response.failed внутри 200-потока: читаем первое
-        # событие до отправки заголовков, иначе LiteLLM видит BadRequestError и не ретраит.
+        # Квота подписки приходит событием response.failed внутри 200-потока (иногда после
+        # preamble), поэтому до отправки заголовков читаем до первого содержательного события.
         gen = sse_events(resp)
-        first = next(gen, None)
-        if first is not None and first.get('type') in FAILED_EVENTS:
+        pre = []
+        failed = None
+        for ev in gen:
+            t = ev.get('type', '')
+            if t in FAILED_EVENTS:
+                failed = ev
+                break
+            pre.append(ev)
+            if t not in PREAMBLE_EVENTS or len(pre) >= 8:
+                break
+        if failed is not None:
             conn.close()
-            log('chat failed before stream:', first.get('type'))
-            return self.relay_error(400, json.dumps(event_error_payload(first)).encode())
+            log('chat failed before stream:', failed.get('type'),
+                str(event_error_payload(failed)['error'].get('message'))[:120])
+            return self.relay_error(400, json.dumps(event_error_payload(failed)).encode())
 
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
@@ -528,7 +550,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(('data: ' + json.dumps(payload) + '\n\n').encode())
 
         try:
-            stream_evs = gen if first is None else itertools.chain([first], gen)
+            stream_evs = gen if not pre else itertools.chain(pre, gen)
             for ev in stream_evs:
                 t = ev.get('type', '')
                 if t == 'response.output_text.delta':
@@ -551,6 +573,9 @@ class Handler(BaseHTTPRequestHandler):
                                            'function': {'arguments': ev.get('delta', '')}}]})
                 elif t == 'response.completed':
                     chunk({}, 'tool_calls' if tool_sent else 'stop')
+                elif t in FAILED_EVENTS:
+                    log('WARN upstream failed mid-stream:',
+                        str(event_error_payload(ev)['error'].get('message'))[:120])
             self.wfile.write(b'data: [DONE]\n\n')
             self.wfile.flush()
         except Exception:
