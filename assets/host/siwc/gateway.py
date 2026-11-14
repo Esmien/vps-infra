@@ -291,6 +291,29 @@ class Handler(BaseHTTPRequestHandler):
     def err(self, code, message, etype='invalid_request_error'):
         self.json_out(code, {'error': {'message': message, 'type': etype, 'code': code}})
 
+    def relay_error(self, status, raw):
+        """Проксировать ошибку апстрима, но исчерпанную квоту подписки сделать повторяемой.
+
+        OpenAI отдаёт "ChatGPT user has reached their Subscription Sharing usage limit"
+        как 400, а LiteLLM ретраит и уходит на следующую ногу группы только на
+        408/409/429/5xx (litellm.should_retry). На 400 цепочка обрывается, и
+        order-фолбэк (OpenRouter) не срабатывает. Отдаём такую ошибку как 429.
+        """
+        try:
+            payload = json.loads(raw or b'{}')
+        except Exception:
+            payload = {'error': {'message': raw[:300].decode('utf-8', 'ignore')}}
+        text = json.dumps(payload).lower()
+        quota = ('usage limit', 'subscription sharing')
+        if status in (400, 403) and any(m in text for m in quota):
+            err = payload.get('error')
+            if not isinstance(err, dict):
+                err = payload['error'] = {'message': str(err)[:300]}
+            err['type'] = 'rate_limit_error'
+            err['code'] = 429
+            status = 429
+        return self.json_out(status, payload)
+
     def body(self):
         n = int(self.headers.get('Content-Length') or 0)
         return json.loads(self.rfile.read(n) or b'{}')
@@ -347,7 +370,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.err(502, 'auth refresh failed')
         if resp.status != 200:
             raw = resp.read()
-            return self.json_out(resp.status, json.loads(raw or b'{}'))
+            return self.relay_error(resp.status, raw)
 
         if not want_stream:
             obj = aggregate(sse_events(resp))
@@ -420,11 +443,7 @@ class Handler(BaseHTTPRequestHandler):
         if resp.status != 200:
             raw = resp.read()
             conn.close()
-            try:
-                payload = json.loads(raw or b'{}')
-            except Exception:
-                payload = {'error': {'message': raw[:300].decode('utf-8', 'ignore')}}
-            return self.json_out(resp.status, payload)
+            return self.relay_error(resp.status, raw)
 
         if not want_stream:
             obj = aggregate(sse_events(resp))
