@@ -10,6 +10,7 @@ ROOT = '/sandbox-users'
 HOST_ROOT = '/home/ai_service/sandbox/users'
 FILES = {'MEMORY': 'MEMORY.md', 'PROFILE': 'PROFILE.md', 'AGENTS': 'AGENTS.md'}
 LIMIT = 10000
+RECORD_LIMIT = 400
 
 class MemoryErrorSafe(Exception):
     pass
@@ -125,8 +126,8 @@ def _save_state(dfd, state):
 def _check_entry(name, value):
     if not isinstance(value, str) or not value.strip() or value != value.strip() or '\n\n' in value or '\r' in value:
         raise MemoryErrorSafe('Нужна одна непустая запись без пустых строк')
-    if name == 'MEMORY' and len(value) > 260:
-        raise MemoryErrorSafe('Запись превышает 260 символов')
+    if name == 'MEMORY' and len(value) > RECORD_LIMIT:
+        raise MemoryErrorSafe(f'Запись превышает {RECORD_LIMIT} символов')
 
 def operate(user, action, name, value='', selected=None):
     if name not in FILES:
