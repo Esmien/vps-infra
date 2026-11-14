@@ -82,6 +82,11 @@ AI_USER = "ai_service"
 AI_HOME = Path("/home/ai_service")
 WEBUI_DATA = AI_HOME / "webui_data"
 NOTIF_DIR = AI_HOME / "notifications"
+# Файловый бэкап кладёт артефакты песочниц под этим префиксом: при восстановлении они
+# уходят НЕ в webui_data, а в каталог пользователя на хосте.
+SANDBOX_USERS = AI_HOME / "sandbox" / "users"
+SANDBOX_PREFIX = "sandbox_users"
+SANDBOX_UID = SANDBOX_GID = 1000  # контейнеры open-terminal работают как ubuntu 1000:1000
 
 PG_VERSION = "17"
 DOCKER_NET = "stack-net"
@@ -2048,17 +2053,51 @@ $$;
         if WEBUI_DATA.is_dir() and any(WEBUI_DATA.iterdir()) and not self.args.restore:
             info("webui_data уже не пуст — пропускаю (--restore чтобы перезаписать)")
             return
-        info(f"{archive.name} ({archive.stat().st_size / 1024**2:.0f} MB) → {WEBUI_DATA}")
+        info(f"{archive.name} ({archive.stat().st_size / 1024**2:.0f} MB) → {WEBUI_DATA} + песочницы")
         if self.dry:
             info("[dry-run] распаковка пропущена")
             return
         self.ensure_dir(WEBUI_DATA, 0o755, AI_USER)
+
+        def _sb_member(member, dest):
+            if member.name.startswith(SANDBOX_PREFIX + "/"):
+                member.name = member.name[len(SANDBOX_PREFIX) + 1:]
+            return tarfile.data_filter(member, dest)
+
         try:
             with tarfile.open(archive) as tar:
+                members = tar.getmembers()
+                for member in members:
+                    while member.name.startswith("./"):
+                        member.name = member.name[2:]
+                sandbox = [m for m in members if m.name.startswith(SANDBOX_PREFIX + "/")]
+                plain = [m for m in members if not m.name.startswith(SANDBOX_PREFIX + "/")]
                 try:
-                    tar.extractall(WEBUI_DATA, filter="data")
+                    tar.extractall(WEBUI_DATA, members=plain, filter="data")
                 except TypeError:  # Python < 3.12
-                    tar.extractall(WEBUI_DATA)
+                    tar.extractall(WEBUI_DATA, members=plain)
+                if sandbox:
+                    self.ensure_dir(SANDBOX_USERS, 0o700, "ubuntu")
+                    slugs = sorted({m.name.split("/")[1] for m in sandbox if m.name.count("/") >= 1})
+                    if self.args.restore:
+                        wanted = sandbox
+                    else:
+                        keep = {s for s in slugs if (SANDBOX_USERS / s).is_dir()
+                                and any((SANDBOX_USERS / s).iterdir())}
+                        wanted = [m for m in sandbox if m.name.split("/")[1] not in keep]
+                        if keep:
+                            info(f"каталоги песочниц уже не пусты, не трогаю: {', '.join(sorted(keep))}")
+                    try:
+                        tar.extractall(SANDBOX_USERS, members=wanted, filter=_sb_member)
+                    except TypeError:  # Python < 3.12
+                        tar.extractall(SANDBOX_USERS, members=wanted)
+                    for slug in sorted({m.name.split("/")[1] for m in wanted}):
+                        user_dir = SANDBOX_USERS / slug
+                        self.run(["chown", "-R", f"{SANDBOX_UID}:{SANDBOX_GID}", str(user_dir)])
+                        agents = user_dir / ".agents"
+                        if agents.is_dir():  # provisioner требует root-owned .agents
+                            self.run(["chown", "-R", "root:root", str(agents)])
+                    ok(f"артефакты песочниц восстановлены: {len({m.name.split('/')[1] for m in wanted})} шт.")
         except (tarfile.TarError, OSError) as exc:
             die(f"не удалось распаковать {archive.name}: {exc}")
         self.run(["chown", "-R", f"{AI_USER}:{AI_USER}", str(WEBUI_DATA)])
