@@ -39,7 +39,7 @@ NOTIFY_ENV_PATH = "/home/ai_service/notifications/.env"
 LOCK_PATH = "/run/sandbox-provisioner.lock"
 
 QUOTA_BYTES = 2 * 1024**3
-PROTECTED = {".local", "bin", "venv", ".arduino15", "Arduino", ".agents"}
+PROTECTED = {".local", "bin", "venv", ".arduino15", "Arduino", ".agents", "generated_images"}
 RETENTION_DAYS = 3
 CONTAINER_PREFIX = "ot-u-"
 CONNECTION_NAME = "Песочница"  # префикс; к нему добавляется часть email до собаки
