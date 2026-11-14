@@ -31,12 +31,12 @@ router_settings:
   cooldown_time: 60      # Заморозка ключа на 1 минуту
   routing_strategy: simple-shuffle # ротирует ключи активной модели, пока не исчерпаются, потом падает на fallback-модель
   # Argon: единственный маршрут — OpenCode (бесплатный прокси убран 2026-11-06)
-  # Terra: план ChatGPT (chatgpt/ + siwc-мост) на случай, если оба платных маршрута
-  # OpenAI легли — уходим на OpenRouter (/chat/completions, там своя трансляция).
+  # Terra: порядок задаётся внутри группы openai/gpt-6.1-terra
+  # (order 1 siwc-мост → 2 OpenRouter → 3 серая chatgpt/), поэтому в fallbacks
+  # её нет — иначе приоритеты дублируются и группа-фолбэк маскирует порядок ног.
   fallbacks:
     - google/gemini-4-argon: ["opencode/gemini-4-argon"]
     - openai/gpt-6-luna: ["opencode/gpt-6-luna"]
-    - openai/gpt-6.1-terra: ["service.openrouter/gpt-6.1-terra"]
 
 #litellm_settings:
 #  model_group_settings:

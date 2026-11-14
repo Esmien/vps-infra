@@ -151,7 +151,9 @@ def ensure_dir(path: str) -> None:
         os.chmod(target, mode)
 
 
-AGENTS_TEMPLATE = """# AGENTS
+AGENTS_BLOCK_BEGIN = "<!-- managed:begin -->"
+AGENTS_BLOCK_END = "<!-- managed:end -->"
+AGENTS_BODY = """# AGENTS
 
 Системные правила и инструкции администратора модели имеют высший приоритет.
 MEMORY.md содержит важный контекст бесед и проектов; PROFILE.md — сведения о пользователе.
@@ -159,7 +161,22 @@ MEMORY.md содержит важный контекст бесед и прое�
 Перед переносом сведений между файлами спросите пользователя. Не удаляйте данные ради уборки.
 При противоречии сведений MEMORY имеет преимущество над PROFILE; спорные записи не удаляйте наугад.
 Новые явные сообщения пользователя имеют приоритет над устаревшими фактами.
+Показывая записи памяти в чате, выводите их дословно, байт в байт, по одной записи в строке и с нумерацией: 1. <запись>, 2. <запись>. Не пересказывайте, не сокращайте, не объединяйте, не переставляйте и не дополняйте записи. Если точный список уже вывел фильтр памяти, не дублируйте его: используйте только его тексты и номера.
 """
+AGENTS_TEMPLATE = AGENTS_BLOCK_BEGIN + "\n" + AGENTS_BODY + AGENTS_BLOCK_END + "\n"
+
+
+def merge_agents_block(existing: str) -> str:
+    """Заменить управляемый блок, сохранив собственный текст пользователя."""
+    begin = existing.find(AGENTS_BLOCK_BEGIN)
+    end = existing.find(AGENTS_BLOCK_END)
+    if begin != -1 and end > begin:
+        return existing[:begin] + AGENTS_TEMPLATE.rstrip("\n") + existing[end + len(AGENTS_BLOCK_END):]
+    if 'Системные правила и инструкции администратора модели имеют высший приоритет.' in existing:
+        # Прежний управляемый текст без маркеров: целиком заменяется новым блоком.
+        return AGENTS_TEMPLATE
+    body = existing.rstrip("\n")
+    return (body + "\n\n" if body else "") + AGENTS_TEMPLATE
 
 
 def user_system_prompt(uid: str) -> str:
@@ -196,11 +213,32 @@ def ensure_memory_files(path: str, uid: str) -> None:
                 except FileNotFoundError:
                     existing = None
                 if existing is not None:
+                    current = None
                     try:
                         if not stat.S_ISREG(os.fstat(existing).st_mode):
                             raise ValueError('memory file is not regular')
+                        if name == 'AGENTS.md':
+                            with os.fdopen(existing, 'r', encoding='utf-8', closefd=False) as stream:
+                                current = stream.read()
                     finally:
                         os.close(existing)
+                    if name == 'AGENTS.md':
+                        merged = merge_agents_block(current or '')
+                        if merged != current:
+                            tmp = '.init-' + uuid.uuid4().hex
+                            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=directory)
+                            try:
+                                with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+                                    stream.write(merged)
+                                    stream.flush()
+                                    os.fsync(stream.fileno())
+                                os.replace(tmp, name, src_dir_fd=directory, dst_dir_fd=directory)
+                                os.fsync(directory)
+                            finally:
+                                try:
+                                    os.unlink(tmp, dir_fd=directory)
+                                except FileNotFoundError:
+                                    pass
                     continue
                 if name == 'AGENTS.md':
                     text = AGENTS_TEMPLATE
