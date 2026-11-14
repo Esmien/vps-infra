@@ -15,6 +15,7 @@ Creds: AUTH_FILE (default /root/siwc/auth.json), refreshed in place, 0600.
 Nothing secret is ever logged.
 """
 import http.client
+import itertools
 import json
 import os
 import socket
@@ -114,6 +115,19 @@ def sse_events(resp):
             continue
 
 
+FAILED_EVENTS = ('response.failed', 'error')
+
+
+def event_error_payload(ev):
+    """Текст ошибки из события response.failed/error в формате тела HTTP-ошибки."""
+    err = (ev.get('response') or {}).get('error') or ev.get('error') or {}
+    if isinstance(err, dict):
+        msg = err.get('message') or json.dumps(err)[:300]
+    else:
+        msg = str(err)[:300]
+    return {'error': {'message': msg, 'type': 'server_error'}}
+
+
 def aggregate(events):
     """Fold Responses SSE events into a single response object."""
     out = {'id': None, 'object': 'response', 'created_at': int(time.time()),
@@ -135,6 +149,12 @@ def aggregate(events):
         elif t == 'error':
             out['status'] = 'failed'
             out['error'] = ev.get('error') or ev
+        elif t == 'response.failed':
+            r = ev.get('response') or {}
+            out['status'] = 'failed'
+            out['error'] = r.get('error') or ev.get('error') or r
+            if r.get('id'):
+                out['id'] = out['id'] or r['id']
     return out
 
 
@@ -375,7 +395,33 @@ class Handler(BaseHTTPRequestHandler):
         if not want_stream:
             obj = aggregate(sse_events(resp))
             conn.close()
+            if obj.get('status') == 'failed':
+                return self.relay_error(
+                    400, json.dumps(event_error_payload({'response': obj})).encode())
             return self.json_out(200, obj)
+
+        # Первое событие читаем ДО отправки 200: исчерпанная квота приходит не HTTP-кодом,
+        # а событием response.failed внутри потока. Отдав её как 200, мы лишаем LiteLLM
+        # ретрая и перехода на order-2 (он видит только BadRequestError).
+        head = []
+        first = None
+        for raw in resp:
+            head.append(raw)
+            line = raw.decode('utf-8', 'ignore').strip()
+            if line.startswith('data:'):
+                chunk = line[5:].strip()
+                if chunk and chunk != '[DONE]':
+                    try:
+                        ev = json.loads(chunk)
+                    except Exception:
+                        ev = None
+                    if isinstance(ev, dict) and ev.get('type'):
+                        first = ev
+                        break
+        if first is not None and first.get('type') in FAILED_EVENTS:
+            conn.close()
+            log('responses failed before stream:', first.get('type'))
+            return self.relay_error(400, json.dumps(event_error_payload(first)).encode())
 
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
@@ -389,7 +435,7 @@ class Handler(BaseHTTPRequestHandler):
         model = body.get('model')
         count = 0
         try:
-            for raw in resp:
+            for raw in itertools.chain(head, resp):
                 line = raw.decode('utf-8', 'ignore').strip()
                 if line.startswith('data:'):
                     chunk = line[5:].strip()
@@ -448,7 +494,19 @@ class Handler(BaseHTTPRequestHandler):
         if not want_stream:
             obj = aggregate(sse_events(resp))
             conn.close()
+            if obj.get('status') == 'failed':
+                return self.relay_error(
+                    400, json.dumps(event_error_payload({'response': obj})).encode())
             return self.json_out(200, to_chat_payload(obj, model))
+
+        # Квота подписки приходит событием response.failed внутри 200-потока: читаем первое
+        # событие до отправки заголовков, иначе LiteLLM видит BadRequestError и не ретраит.
+        gen = sse_events(resp)
+        first = next(gen, None)
+        if first is not None and first.get('type') in FAILED_EVENTS:
+            conn.close()
+            log('chat failed before stream:', first.get('type'))
+            return self.relay_error(400, json.dumps(event_error_payload(first)).encode())
 
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
@@ -470,7 +528,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(('data: ' + json.dumps(payload) + '\n\n').encode())
 
         try:
-            for ev in sse_events(resp):
+            stream_evs = gen if first is None else itertools.chain([first], gen)
+            for ev in stream_evs:
                 t = ev.get('type', '')
                 if t == 'response.output_text.delta':
                     if not sent_role:
