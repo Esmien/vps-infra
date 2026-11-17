@@ -93,3 +93,9 @@ RUN sed -i 's|<link rel="stylesheet" href="/static/custom.css" crossorigin="use-
 LABEL org.opencontainers.image.title="Esmien AI (derived from Open WebUI)" \
       org.opencontainers.image.description="Open WebUI с кастомным брендингом Esmien AI" \
       org.opencontainers.image.source="https://github.com/open-webui/open-webui"
+
+# 5) Unicode chat terms and bounded fallback for the built-in chat search tool.
+# Fail closed when upstream source changes; review patch on each base update.
+COPY patch_chat_search.py /tmp/patch_chat_search.py
+RUN python /tmp/patch_chat_search.py && rm /tmp/patch_chat_search.py
+

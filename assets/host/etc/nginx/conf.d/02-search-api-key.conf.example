@@ -1,0 +1,8 @@
+# Ключ доступа к https://search.esmien.ru (SearXNG public API) — ШАБЛОН.
+# Живой файл: /etc/nginx/conf.d/02-search-api-key.conf (0640 root:root, в git не попадает).
+# Восстановление: KEY=$(openssl rand -hex 16) и подставить его вместо <SET_ON_HOST>;
+# при смене ключа — клиентам выдать новый.
+map $http_x_api_key $search_key_hdr { default 0; "<SET_ON_HOST>" 1; }
+map $arg_key        $search_key_arg { default 0; "" 0; "<SET_ON_HOST>" 1; }
+map "$search_key_hdr$search_key_arg" $search_key_ok { default 0; "10" 1; "01" 1; "11" 1; }
+limit_req_zone $client_ip zone=search_api:10m rate=5r/s;
