@@ -1209,41 +1209,29 @@ def _restore_into_temp_db(db_name: str, dump: Path) -> tuple[bool, str]:
             # любой дамп больше лимита уходит частями, значит и здесь его надо резать так же.
             split = dump.stat().st_size > TG_DOC_LIMIT
             parts_count = split_part_count(dump.stat().st_size) if split else 1
-            if split:
-                parts = split_into(dump, Path(workdir), parts_count)
-                with tempfile.TemporaryFile() as errfile:
-                    proc = subprocess.Popen(
-                        [
-                            "sudo", "-u", "postgres", "env",
-                            f"PGOPTIONS=-c maintenance_work_mem={VERIFY_MAINTENANCE_WORK_MEM}",
-                            "pg_restore",
-                            "--no-owner", "--no-privileges", "-d", temp_db,
-                        ],
-                        stdin=subprocess.PIPE,
-                        stdout=subprocess.DEVNULL,
-                        stderr=errfile,
-                    )
-                    with proc.stdin:
-                        for part in parts:
-                            with part.open("rb") as handle:
-                                shutil.copyfileobj(handle, proc.stdin, 1024 * 1024)
-                    code = proc.wait(timeout=VERIFY_TIMEOUT_SECONDS)
-                    errfile.seek(0)
-                    stderr = errfile.read().decode("utf-8", "replace")
-            else:
-                result = subprocess.run(
+            # pg_restore всегда читает дамп из stdin: временная директория приватна для
+            # root (0700), и процесс postgres не может открыть в ней файл по пути —
+            # именно так ломалось восстановление одиночных дампов (litellm_db).
+            sources = split_into(dump, Path(workdir), parts_count) if split else [dump]
+            with tempfile.TemporaryFile() as errfile:
+                proc = subprocess.Popen(
                     [
                         "sudo", "-u", "postgres", "env",
                         f"PGOPTIONS=-c maintenance_work_mem={VERIFY_MAINTENANCE_WORK_MEM}",
                         "pg_restore",
-                        "--no-owner", "--no-privileges", "-d", temp_db, str(dump),
+                        "--no-owner", "--no-privileges", "-d", temp_db,
                     ],
-                    capture_output=True,
-                    text=True,
-                    timeout=VERIFY_TIMEOUT_SECONDS,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=errfile,
                 )
-                code = result.returncode
-                stderr = result.stderr
+                with proc.stdin:
+                    for part in sources:
+                        with part.open("rb") as handle:
+                            shutil.copyfileobj(handle, proc.stdin, 1024 * 1024)
+                code = proc.wait(timeout=VERIFY_TIMEOUT_SECONDS)
+                errfile.seek(0)
+                stderr = errfile.read().decode("utf-8", "replace")
         elapsed = time.monotonic() - started
         if code != 0:
             return False, f"восстановление не удалось: {_first_error_line(stderr) or f'pg_restore код {code}'}"
@@ -1715,8 +1703,13 @@ def systemd_result(unit: str) -> str:
     return ", ".join(part for part in out.strip().splitlines() if part)
 
 
-def verify_backup() -> None:
-    """Check the last nightly backup run and send a report to the message bot."""
+def verify_backup() -> list[str]:
+    """Check the last nightly backup run and send a report to the message bot.
+
+    Returns the list of problems found so the caller can exit non-zero: the report
+    itself already went to Telegram, and a silent exit 0 made the nightly cron run
+    declare "проблем нет" while the report showed a failed restore.
+    """
     backup_dir = env_path("BACKUP_DIR", "/var/backups").resolve()
     pattern = os.environ.get("BACKUP_PATTERN", "*.dump")
     now = time.time()
@@ -1791,6 +1784,7 @@ def verify_backup() -> None:
     else:
         lines.append("✅ Всё в порядке: дампы на месте и восстановлены во временную БД.")
     send_long_message("\n".join(lines), parse_mode="HTML")
+    return problems
 
 
 def send_text(text: str) -> None:
@@ -1978,7 +1972,10 @@ def main() -> int:
         elif args.command == "backup":
             notify_backup(args.file, dry_run=args.dry_run)
         elif args.command == "verify":
-            verify_backup()
+            problems = verify_backup()
+            if problems:
+                print("verify: PROBLEMS: " + " | ".join(problems)[:800])
+                return 2
         elif args.command == "send":
             send_text(args.text)
     except MonitorError as exc:
