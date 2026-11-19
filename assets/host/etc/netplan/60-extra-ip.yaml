@@ -1,0 +1,8 @@
+# Дополнительный публичный IPv4 (WeaselCloud, привязан к порту ВМ в панели).
+# Отдельным файлом: 50-cloud-init.yaml перегенерируется cloud-init при загрузке.
+network:
+    version: 2
+    ethernets:
+        ens3:
+            addresses:
+                - 85.92.158.226/32
