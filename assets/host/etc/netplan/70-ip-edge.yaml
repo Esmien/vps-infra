@@ -1,0 +1,7 @@
+# второй адрес под VPN-вход (edge): 85.92.158.238
+network:
+  version: 2
+  ethernets:
+    ens3:
+      addresses:
+        - 85.92.158.238/32
