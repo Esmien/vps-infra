@@ -1,0 +1,22 @@
+[Unit]
+Description=OpenCode web server (user tower-empire, loopback only)
+Documentation=https://opencode.ai/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tower-empire
+Group=tower-empire
+WorkingDirectory=/home/tower-empire/T_E
+Environment=HOME=/home/tower-empire
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=TMPDIR=/tmp
+ExecStart=/usr/local/bin/opencode web --hostname 127.0.0.1 --port 4096
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
