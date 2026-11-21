@@ -9,7 +9,7 @@ set -euo pipefail
 
 BASE="${OPENCODE_PUBLIC_URL:-https://opencode.esmien.com}"
 ENVFILE="${OPENCODE_ENV_FILE:-/etc/opencode-server.env}"
-LOCAL="${OPENCODE_LOCAL_URL:-http://127.0.0.1:4096}"
+LOCAL="${OPENCODE_LOCAL_URL:-http://127.0.0.1:49374}"
 MODE="${1:-link}"
 
 [ -r "$ENVFILE" ] || { echo "нет доступа к $ENVFILE" >&2; exit 1; }
