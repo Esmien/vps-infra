@@ -47,6 +47,10 @@ SOURCE_PATTERNS = (
     "/etc/turnstile-gate.env",
     # Пароль/API-ключ WebUI-админа для аппрувера регистраций.
     "/root/.config/owui-signup-approver/env",
+    # Cloudflare API-токены (зонный cf.ini и account-level cf-esmien-com.ini):
+    # без них после потери хоста не выпустить wildcard-сертификат и перевыпускать
+    # full-access токен руками. offsite.key сюда не попадает — он *.key, не *.ini.
+    "/root/.secrets/*.ini",
 )
 WORK = Path("/var/lib/secrets-offsite")
 KEY_DIR = Path("/root/.secrets")
