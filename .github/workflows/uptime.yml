@@ -7,7 +7,8 @@ name: uptime
 # Про Cloudflare: ai.esmien.ru идёт через CF с бот-защитой, и раннер GitHub для неё —
 # бот: ответ 403 означает «CF жив и фильтрует», а не «сервер упал». Поэтому 403 для
 # этого адреса считается нормой, а живость origin проверяется по DNS-only адресу
-# llm.esmien.ru напрямую (nginx + LiteLLM + WebUI).
+# llm.esmien.ru через /webui-health (nginx -> WebUI). Сам LiteLLM снаружи закрыт
+# и проверяется локально (litellm-watchdog.timer).
 
 on:
   schedule:
@@ -48,9 +49,9 @@ jobs:
             return 1
           }
           rc=0
-          # origin напрямую (CF DNS-only): nginx + LiteLLM
-          probe https://llm.esmien.ru/health/liveliness 200 || rc=1
-          # origin напрямую: WebUI (nginx -> 127.0.0.1:8080/health)
+          # origin напрямую (CF DNS-only): WebUI (nginx -> 127.0.0.1:8080/health).
+          # LiteLLM снаружи закрыт (allow только edge+хост), поэтому его живость
+          # сторожит не эта проверка, а litellm-watchdog.timer на самом хосте.
           probe https://llm.esmien.ru/webui-health 200 || rc=1
           # через Cloudflare: 200 = всё ок, 403 = CF жив и режет бота-раннера
           probe https://ai.esmien.ru/ 200,403 || rc=1
