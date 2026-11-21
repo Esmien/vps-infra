@@ -1,6 +1,6 @@
 {
   "brand": "Esmien VPN",
-  "host": "vpn.esmien.ru",
+  "host": "share.esmien.com",
   "cert_dir": "/etc/letsencrypt/live/esmien-wildcard",
   "port": 8443,
   "alt_port": 2087,

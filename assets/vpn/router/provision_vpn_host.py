@@ -5,7 +5,7 @@
 2. on success: point brand.json at the new host + cert, rebuild nginx confs and
    subscriptions, reload nginx, verify an end-to-end request.
 
-Usage: provision_vpn_host.py vpn.esmien.ru
+Usage: provision_vpn_host.py share.esmien.com
 """
 import json
 import subprocess

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Rebuild nginx entry configs + VPN subscriptions from /root/vpn-router/brand.json.
 
-Switching the public host name (e.g. vpn.esmien.qd.je -> vpn.esmien.ru):
+Switching the public host name (e.g. vpn.esmien.qd.je -> share.esmien.com):
   1. edit "host" and "cert_dir" in brand.json
   2. python3 /root/vpn-router/apply_brand.py
   3. nginx -t && systemctl reload nginx

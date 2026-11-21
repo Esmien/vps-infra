@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print VLESS-over-WebSocket links (real TLS, SNI vpn.esmien.ru).
+"""Print VLESS-over-WebSocket links (real TLS, SNI share.esmien.com).
 
 8443 - primary entry, 2087 - backup entry if the ISP starts blocking 8443.
 """
@@ -11,9 +11,9 @@ for port, tag in ((8443, "mon-ws-8443"), (2087, "mon-ws-2087-backup")):
     params = {
         "type": "ws",
         "security": "tls",
-        "sni": "vpn.esmien.ru",
-        "host": "vpn.esmien.ru",
+        "sni": "share.esmien.com",
+        "host": "share.esmien.com",
         "path": "/ws",
         "encryption": "none",
     }
-    print(f"vless://{uid}@vpn.esmien.ru:{port}?" + urllib.parse.urlencode(params) + f"#{tag}")
+    print(f"vless://{uid}@share.esmien.com:{port}?" + urllib.parse.urlencode(params) + f"#{tag}")
