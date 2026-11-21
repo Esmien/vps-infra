@@ -12,6 +12,7 @@ WorkingDirectory=/home/tower-empire/T_E
 Environment=HOME=/home/tower-empire
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=TMPDIR=/tmp
+EnvironmentFile=-/etc/opencode-server.env
 ExecStart=/usr/local/bin/opencode web --hostname 127.0.0.1 --port 4096
 Restart=always
 RestartSec=3
