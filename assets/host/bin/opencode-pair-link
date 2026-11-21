@@ -1,0 +1,35 @@
+#!/bin/bash
+# opencode-pair-link — выпускает одноразовый ключ доступа к opencode-серверу.
+#
+#   opencode-pair-link            ссылка для браузера/приложения (живёт 5 минут)
+#   opencode-pair-link --token    session token (вставить в приложении в поле пароля)
+#
+# Пароль сервера берётся из /etc/opencode-server.env, наружу не печатается.
+set -euo pipefail
+
+BASE="${OPENCODE_PUBLIC_URL:-https://opencode.esmien.com}"
+ENVFILE="${OPENCODE_ENV_FILE:-/etc/opencode-server.env}"
+LOCAL="${OPENCODE_LOCAL_URL:-http://127.0.0.1:4096}"
+MODE="${1:-link}"
+
+[ -r "$ENVFILE" ] || { echo "нет доступа к $ENVFILE" >&2; exit 1; }
+PW="$(grep -oP '^OPENCODE_PASSWORD=\K.*' "$ENVFILE")"
+[ -n "$PW" ] || { echo "OPENCODE_PASSWORD не найден в $ENVFILE" >&2; exit 1; }
+
+code="$(curl -fsS -m 10 -u "opencode:$PW" -X POST "$LOCAL/api/pair" \
+        | sed -E 's/.*"code":"([^"]+)".*/\1/')"
+[ -n "$code" ] || { echo "не удалось получить pairing-код" >&2; exit 1; }
+
+case "$MODE" in
+    --token|token)
+        curl -fsS -m 10 -H 'Accept: application/json' "$LOCAL/auth/connect/$code" \
+            | sed -E 's/.*"token":"([^"]+)".*/\1/'
+        ;;
+    link|--link)
+        echo "$BASE/auth/connect/$code"
+        ;;
+    *)
+        echo "usage: $0 [--token]" >&2
+        exit 2
+        ;;
+esac
