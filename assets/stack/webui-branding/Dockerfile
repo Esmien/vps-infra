@@ -108,3 +108,11 @@ RUN python /tmp/patch_chat_search.py && rm /tmp/patch_chat_search.py
 COPY patch_chat_file_mirror.py /tmp/patch_chat_file_mirror.py
 RUN python /tmp/patch_chat_file_mirror.py && rm /tmp/patch_chat_file_mirror.py
 
+# 7) Компакция контекста только ДО запроса. Upstream вызывает её ещё и внутри
+#    tool-loop после каждой пачки результатов — агент теряет то, что только что
+#    прочитал, и задача рвётся на середине. Патч глушит именно loop-вызов;
+#    компакция при сборке запроса и ручная (POST /api/v1/chats/{id}/compact)
+#    остаются.
+COPY patch_compaction_timing.py /tmp/patch_compaction_timing.py
+RUN python /tmp/patch_compaction_timing.py && rm /tmp/patch_compaction_timing.py
+
