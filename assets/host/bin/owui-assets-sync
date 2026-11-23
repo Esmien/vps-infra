@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Sync Open WebUI's hashed SvelteKit assets to the host so nginx serves them
+# from disk instead of the single-process Python worker.
+# Idempotent: re-copies only when the container image changes.
+set -euo pipefail
+
+CONTAINER=open-webui
+DEST=/var/www/owui-assets
+MARKER=/var/lib/owui-assets-image
+
+image=$(docker inspect -f '{{.Image}}' "$CONTAINER")
+if [[ -f $MARKER ]] && [[ "$(cat "$MARKER")" == "$image" ]] && [[ -d $DEST/_app/immutable ]]; then
+    echo "assets up to date ($image)"
+    exit 0
+fi
+
+tmp="$DEST/_app.tmp.$$"
+rm -rf "$tmp"
+docker cp "$CONTAINER:/app/build/_app" "$tmp"
+rm -rf "$DEST/_app"
+mv "$tmp" "$DEST/_app"
+chown -R root:www-data "$DEST"
+chmod -R 755 "$DEST"
+printf '%s\n' "$image" > "$MARKER"
+echo "assets synced from $image: $(du -sh "$DEST/_app/immutable" | cut -f1)"

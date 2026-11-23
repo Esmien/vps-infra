@@ -1,0 +1,7 @@
+[Unit]
+Description=Sync Open WebUI hashed assets to nginx disk cache
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/owui-assets-sync
