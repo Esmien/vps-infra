@@ -99,3 +99,12 @@ LABEL org.opencontainers.image.title="Esmien AI (derived from Open WebUI)" \
 COPY patch_chat_search.py /tmp/patch_chat_search.py
 RUN python /tmp/patch_chat_search.py && rm /tmp/patch_chat_search.py
 
+# 6) Вложения чата → песочница. Upload живёт в DATA_DIR/uploads контейнера
+#    open-webui, а агент видит только свой workspace: модель получала base64
+#    картинки и текст PDF, но не оригинал («не могу получить исходник»).
+#    Патч копирует upload в <sandbox>/uploads при первом упоминании в запросе
+#    и добавляет path="..." в тег <file .../>. Правила slug — как в
+#    sandbox-provisioner.py / terminal-autoselect.js.
+COPY patch_chat_file_mirror.py /tmp/patch_chat_file_mirror.py
+RUN python /tmp/patch_chat_file_mirror.py && rm /tmp/patch_chat_file_mirror.py
+
