@@ -8,13 +8,15 @@
 
 Что делает патч:
   1) в тег <file .../> добавляет path="..." — путь оригинала, как его видит
-     агент (/home/user/workspace/uploads/<имя>);
-  2) перед этим копирует upload в <sandbox>/uploads (lazy, при первом
+     агент (/home/user/workspace/files/input/<имя>, рядом с files/output);
+  2) перед этим копирует upload в <sandbox>/files/input (lazy, при первом
      упоминании файла в запросе). Копия делается один раз: если файл уже есть
      с тем же размером — не трогаем, чтобы не затереть правки агента.
 
 Правила слаг-а те же, что в sandbox-provisioner.py и terminal-autoselect.js:
 локальная часть email, [^a-z0-9]+ -> '-', обрезка 24.
+
+user в pipeline — pydantic UserModel, а не dict: читаем и атрибуты, и ключи.
 
 Fail closed: если апстрим переименует функции — сборка падает.
 """
@@ -22,7 +24,7 @@ Fail closed: если апстрим переименует функции — �
 from pathlib import Path
 
 TARGET = Path('/app/backend/open_webui/utils/middleware.py')
-MARKER = 'SANDBOX_UPLOADS_SUBDIR'
+MARKER = 'SANDBOX_INPUT_SUBDIR'
 
 OLD_HEAD = '''def add_file_context(messages: list) -> list:
     """
@@ -38,8 +40,8 @@ OLD_HEAD = '''def add_file_context(messages: list) -> list:
 '''
 
 NEW_HEAD = '''SANDBOX_USERS_ROOT = '/sandbox-users'
-SANDBOX_UPLOADS_SUBDIR = 'uploads'
-SANDBOX_AGENT_UPLOADS = '/home/user/workspace/uploads'
+SANDBOX_INPUT_SUBDIR = 'files/input'
+SANDBOX_AGENT_INPUT = '/home/user/workspace/files/input'
 
 
 def _sandbox_slug(email: str | None) -> str:
@@ -48,12 +50,19 @@ def _sandbox_slug(email: str | None) -> str:
     return re.sub(r'^-+|-+$', '', re.sub(r'[^a-z0-9]+', '-', local))[:24]
 
 
-def _mirror_upload_for_user(file: dict, user: dict | None) -> str | None:
-    """Копирует upload в песочницу пользователя, возвращает путь глазами агента.
+def _user_field(user, key: str):
+    """user приходит и dict-ом, и pydantic-моделью UserModel."""
+    if isinstance(user, dict):
+        return user.get(key)
+    return getattr(user, key, None)
+
+
+def _mirror_upload_for_user(file: dict, user) -> str | None:
+    """Копирует upload в <sandbox>/files/input, возвращает путь глазами агента.
 
     None — если копировать нечего/некуда (нет песочницы, файл не upload).
     """
-    if not isinstance(file, dict) or not isinstance(user, dict):
+    if not isinstance(file, dict) or user is None:
         return None
 
     file_id = file.get('id') or file.get('url')
@@ -61,7 +70,7 @@ def _mirror_upload_for_user(file: dict, user: dict | None) -> str | None:
     if not isinstance(file_id, str) or not file_id or not isinstance(name, str) or not name:
         return None
 
-    slug = _sandbox_slug(user.get('email'))
+    slug = _sandbox_slug(_user_field(user, 'email'))
     if not slug:
         return None
 
@@ -91,9 +100,9 @@ def _mirror_upload_for_user(file: dict, user: dict | None) -> str | None:
     if source is None:
         return None
 
-    uploads_dir = os.path.join(sandbox_dir, SANDBOX_UPLOADS_SUBDIR)
-    target = os.path.join(uploads_dir, safe_name)
-    agent_path = f'{SANDBOX_AGENT_UPLOADS}/{safe_name}'
+    input_dir = os.path.join(sandbox_dir, SANDBOX_INPUT_SUBDIR)
+    target = os.path.join(input_dir, safe_name)
+    agent_path = f'{SANDBOX_AGENT_INPUT}/{safe_name}'
 
     try:
         source_size = source.stat().st_size
@@ -102,19 +111,34 @@ def _mirror_upload_for_user(file: dict, user: dict | None) -> str | None:
                 return agent_path
             # То же имя, другой файл: не затираем, кладём рядом с префиксом id.
             safe_name = f'{file_id[:8]}_{safe_name}'
-            target = os.path.join(uploads_dir, safe_name)
-            agent_path = f'{SANDBOX_AGENT_UPLOADS}/{safe_name}'
+            target = os.path.join(input_dir, safe_name)
+            agent_path = f'{SANDBOX_AGENT_INPUT}/{safe_name}'
             if os.path.exists(target):
                 return agent_path
-        os.makedirs(uploads_dir, exist_ok=True)
-        shutil.copyfile(source, target)
-        os.chmod(target, 0o644)
+
+        created = not os.path.isdir(input_dir)
+        os.makedirs(input_dir, exist_ok=True)
         try:
             # Владелец — как у самой песочницы: агент должен мочь файл заменить.
             sandbox_stat = os.stat(sandbox_dir)
-            os.chown(target, sandbox_stat.st_uid, sandbox_stat.st_gid)
         except OSError:
-            pass
+            sandbox_stat = None
+
+        if created and sandbox_stat is not None:
+            # files/ могла не существовать: обе новые директории — агенту.
+            for directory in (os.path.dirname(input_dir), input_dir):
+                try:
+                    os.chown(directory, sandbox_stat.st_uid, sandbox_stat.st_gid)
+                except OSError:
+                    pass
+
+        shutil.copyfile(source, target)
+        os.chmod(target, 0o644)
+        if sandbox_stat is not None:
+            try:
+                os.chown(target, sandbox_stat.st_uid, sandbox_stat.st_gid)
+            except OSError:
+                pass
     except OSError as e:
         log.warning('sandbox file mirror failed for %s: %s', file_id, e)
         return None
@@ -122,7 +146,7 @@ def _mirror_upload_for_user(file: dict, user: dict | None) -> str | None:
     return agent_path
 
 
-def add_file_context(messages: list, user: dict | None = None) -> list:
+def add_file_context(messages: list, user=None) -> list:
     """
     Replay attachment references beside their original user messages for native tools.
 
@@ -174,7 +198,7 @@ NEW_SIGNATURE = '''def process_messages_with_output(
     messages: list[dict],
     reasoning_format: str | None = None,
     include_file_context: bool = False,
-    user: dict | None = None,
+    user=None,
 ) -> list[dict]:'''
 
 OLD_CALLS = [
@@ -239,15 +263,16 @@ def main() -> int:
     check = TARGET.read_text(encoding='utf-8')
     for needle in (
         MARKER,
-        'def add_file_context(messages: list, user: dict | None = None)',
+        'def add_file_context(messages: list, user=None)',
         'add_file_context(processed, user=user)',
-        "path = f'{SANDBOX_AGENT_UPLOADS}",
+        "agent_path = f'{SANDBOX_AGENT_INPUT}",
+        '_user_field(user, ',
     ):
         if needle not in check:
             print(f'FAIL: verification missing {needle}')
             return 1
 
-    print('patched chat file mirroring into sandbox')
+    print('patched chat file mirroring into sandbox (files/input)')
     return 0
 
 
