@@ -130,6 +130,51 @@ install -m 644 /usr/lib/python3/dist-packages/certbot_nginx/_internal/tls_config
 install -m 644 /usr/lib/python3/dist-packages/certbot/ssl-dhparams.pem /etc/letsencrypt/
 ```
 
+### Грабли: rate limiting душит собственный WebUI
+
+После разделения WebUI ходит в LiteLLM не по docker-имени, а по публичному
+`https://llm.<домен>/v1` — через тот же nginx, где стоят лимиты от сканеров.
+Три вещи складываются в симптом «модели то и дело отваливаются»:
+
+1. **`$remote_addr` = `127.0.0.1` у всех клиентов.** Vhost слушает
+   `127.0.0.1:9443 proxy_protocol`, но одного `proxy_protocol` в `listen`
+   мало: без `real_ip_header proxy_protocol; set_real_ip_from 127.0.0.1;`
+   nginx оставляет в `$remote_addr` адрес stream-фронта. Все `limit_req_zone`
+   по `$binary_remote_addr` становятся глобальными на сервер, а не на IP.
+2. **`/v1/models` под лимитом `1r/s`.** У WebUI столько подключений, сколько
+   строк в `openai.api_base_urls` (в нашей конфигурации — 8 на один и тот же
+   URL). Одно обновление списка = 8 параллельных запросов, `burst=5`
+   кончается мгновенно, остальные получают 429 с `text/html`.
+3. **WebUI выбрасывает модели упавшего подключения.** `get_all_models()`
+   пишет `Connection error: 429` и не отдаёт модели этого connection, пока
+   следующий запрос не пройдёт.
+
+Лечение: `real_ip_header` в vhost + доверенный хост вне лимита (пустой ключ в
+`limit_req_zone`/`limit_conn_zone` означает «запрос не учитывается»):
+
+```nginx
+geo $trusted_client { default 0; <IP webui-хоста>/32 1; }
+map $trusted_client $limit_key { 0 $binary_remote_addr; 1 ""; }
+limit_req_zone $limit_key zone=llm_models:10m rate=2r/s;
+```
+
+Заодно `limit_conn conn_per_ip` с 20 поднимается до 60: восемь человек со
+стримингом держат соединения десятками секунд, и легитимные запросы получали
+503.
+
+**Ловушка reload.** Если поменять выражение ключа у уже существующей зоны,
+`nginx -t` пройдёт, а `systemctl reload nginx` молча не применится:
+
+```
+[emerg] limit_req "llm_api" uses the "$limit_key" key while previously it used the "$binary_remote_addr" key
+```
+
+nginx переиспользует созданную shared-зону и запрещает менять в ней ключ.
+Нужен полный `systemctl restart nginx` — это кратковременный обрыв
+VPN-сессий, клиенты переподключатся. Проверка после: в
+`/var/log/nginx/llm.access.log` должен стоять реальный IP клиента, а не
+`127.0.0.1`.
+
 ## VPN-вход (edge)
 
 `vpn-service/scripts/deploy.sh` — после правок 24.11.2026 он сам:
