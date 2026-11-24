@@ -245,6 +245,43 @@ where key = 'openai.api_base_urls';
 - `sandbox-provisioner.py --dry-run` показывает, каких контейнеров не хватает;
 - `ensure_memory_files` не перезаписывает существующие AGENTS/MEMORY/PROFILE.
 
+### Терминал WebUI сразу на оба хоста
+
+`open-terminal` монтирует корень RU в `/mnt/host` и `docker.sock`, то есть в
+терминале WebUI уже есть root на RU. Чтобы оттуда же видеть edge, нужен ключ и
+две записи в `authorized_keys`:
+
+```bash
+# на RU
+ssh-keygen -q -t ed25519 -N "" -C "webui-terminal@esmien-vds" -f /root/.ssh/id_ed25519_webui_edge
+
+# на edge — только pty, только с IP RU-хоста
+echo 'restrict,pty,from="217.197.114.197" <pubkey>' >> /root/.ssh/authorized_keys
+
+# на RU — тот же ключ для входа в сам RU по шлюзу docker-сети
+echo 'restrict,pty,from="172.16.0.0/12" <pubkey>' >> /root/.ssh/authorized_keys
+
+# known_hosts: отпечатки обоих хостов, сверить с ssh-keygen -lf на самом хосте
+ssh-keyscan -t ed25519 138.124.180.251 >> /root/.ssh/known_hosts
+docker exec open-terminal sh -c 'ssh-keyscan -t ed25519 172.18.0.1 >> /mnt/host/root/.ssh/known_hosts'
+```
+
+`assets/host/open-terminal-config/.bashrc` добавляет четыре функции:
+
+- `ru` / `edge` — интерактивный шелл на нужном хосте;
+- `both-run 'systemctl status nginx'` — одна команда на оба, вывод подряд;
+- `both` — tmux с двумя панелями: слева RU, справа edge.
+
+**Грабли: `chroot /mnt/host` не годится для `systemctl`.** Команда выполняется
+в корне хоста, но в PID-namespace контейнера, и systemd отказывает:
+`Failed to connect to bus: No data available`. Поэтому `ru` ходит по SSH на
+шлюз docker-сети, а не через `chroot-host`.
+
+Ключ и `known_hosts` лежат на хосте RU (`/root/.ssh`) и видны в контейнере
+через `/mnt/host` — пересоздание `open-terminal` их не теряет. Цена: терминал
+WebUI становится точкой, из которой достижим root обоих хостов (на RU он и так
+был через `docker.sock`), поэтому ключ ограничен `restrict,pty` и `from=`.
+
 ### Бэкапы на разделённых хостах
 
 `assets/stack/backup-databases.sh` сам определяет, какие БД доступны: на
