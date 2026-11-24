@@ -45,6 +45,17 @@ chown root:ai_service /etc/backup-crypto.key && chmod 440 /etc/backup-crypto.key
 install -m 755 assets/host/bin/dump-crypto /usr/local/bin/dump-crypto
 ```
 
+Своп: 4 ГБ файлом, `swappiness=10`. Не ради «добавить памяти», а чтобы ядро не
+убивало самый крупный процесс на первом пике — на 4 ГБ edge OOM-kill забирает
+LiteLLM или Hermes, и WebUI на время рестарта теряет модели.
+
+```bash
+fallocate -l 4G /swap.img && chmod 600 /swap.img && mkswap /swap.img && swapon /swap.img
+echo '/swap.img none swap sw 0 0' >> /etc/fstab
+printf 'vm.swappiness = 10\nvm.vfs_cache_pressure = 50\n' > /etc/sysctl.d/99-swap.conf
+sysctl -q -p /etc/sysctl.d/99-swap.conf
+```
+
 ### Грабли: ufw режет docker → PostgreSQL
 
 Docker-контейнеры ходят на хост через `host.docker.internal` (172.17.0.1 /

@@ -267,6 +267,7 @@ RESTORE_DBS = ("webui_db", "litellm_db", "webui_data")
 STEPS: list[tuple[str, str]] = [
     ("preflight", "Проверка окружения и сбор параметров"),
     ("packages", "Системные пакеты и Docker"),
+    ("swap", "Своп-файл и swappiness"),
     ("users", "Пользователь ai_service и каталоги"),
     ("stack", "Файлы стека"),
     ("secrets", "Секреты и .env"),
@@ -1039,6 +1040,49 @@ class Installer:
                 die("docker compose (v2) недоступен после установки")
         cv = (res.stdout or "").strip()
         ok(f"compose {cv.split()[-1]}" if cv else "compose v2 доступен")
+
+    def step_swap(self) -> None:
+        """Своп-файл и swappiness.
+
+        Своп не добавляет памяти — он не даёт ядру убить самый крупный процесс
+        на первом же пике. На 4 ГБ edge без свопа OOM-kill забирает LiteLLM или
+        Hermes, и WebUI на время рестарта контейнера теряет модели. swappiness
+        10: ядро выгружает страницы только под реальным давлением, а не «на
+        всякий случай».
+
+        Идемпотентно: существующий /swap.img не пересоздаётся и не меняет
+        размер, повторная запись в /etc/fstab не добавляется.
+        """
+        step("Своп-файл")
+        path = Path("/swap.img")
+        if path.is_file():
+            ok(f"{path} уже существует")
+        else:
+            self.run(["fallocate", "-l", "4G", str(path)])
+            self.run(["chmod", "600", str(path)])
+            self.run(["mkswap", str(path)])
+            ok(f"{path} создан (4G)")
+
+        fstab = Path("/etc/fstab")
+        if fstab.is_file() and str(path) not in fstab.read_text():
+            self.write_file(fstab, fstab.read_text() + f"{path} none swap sw 0 0\n", 0o644, "root")
+            ok("/etc/fstab: запись о свопе добавлена")
+
+        active = self.run(["swapon", "--show"], check=False).stdout or ""
+        if str(path) not in active:
+            self.run(["swapon", str(path)])
+            ok("своп включён")
+
+        self.write_file(
+            Path("/etc/sysctl.d/99-swap.conf"),
+            "# Своп — амортизатор пиков, а не продолжение RAM.\n"
+            "vm.swappiness = 10\n"
+            "vm.vfs_cache_pressure = 50\n",
+            0o644,
+            "root",
+        )
+        self.run(["sysctl", "-q", "-p", "/etc/sysctl.d/99-swap.conf"], check=False)
+        ok("vm.swappiness=10")
 
     def step_users(self) -> None:
         step(f"Пользователь {AI_USER} и каталоги")
