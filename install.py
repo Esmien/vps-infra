@@ -2020,9 +2020,14 @@ $$;
             if self.dry:
                 proc = subprocess.CompletedProcess([], 0)
             else:
+                # maintenance_work_mem по умолчанию 64 МБ, а ivfflat-индекс из дампа
+                # требует ~65 МБ — восстановление падало на CREATE INDEX. PGOPTIONS
+                # поднимает лимит только для сессий pg_restore (через env, потому что
+                # sudo сбрасывает окружение).
                 with dump.open("rb") as dump_fh, log.open("w") as lf:
                     proc = subprocess.run(
-                        ["sudo", "-u", "postgres", "pg_restore", f"--dbname={db}", "--clean", "--if-exists",
+                        ["sudo", "-u", "postgres", "env", "PGOPTIONS=-c maintenance_work_mem=256MB",
+                         "pg_restore", f"--dbname={db}", "--clean", "--if-exists",
                          "--no-owner", "--no-privileges", "--single-transaction", "--verbose"],
                         stdin=dump_fh, stdout=lf, stderr=subprocess.STDOUT,
                     )

@@ -41,6 +41,11 @@ curl -fsSL …/bootstrap.sh | sudo bash -s -- --yes
 
 ## Переезд на новый сервер
 
+**Разделённая схема** (WebUI на одном хосте, LiteLLM и VPN на другом) —
+см. [docs/split-deploy.md](docs/split-deploy.md): там раскладка ролей,
+DNS, сертификаты, бэкапы и все грабли (docker→PostgreSQL, pgvector/ivfflat,
+префиксы подключений WebUI, SNI панелей).
+
 **Одной командой (рекомендуется).** Дампы и состояние Hermes тянутся сами:
 
 ```bash
