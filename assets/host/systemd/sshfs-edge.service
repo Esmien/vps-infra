@@ -1,0 +1,25 @@
+[Unit]
+Description=SSHFS mount of the edge host root at /mnt/edge
+Documentation=https://github.com/Esmien/vps-infra/blob/main/docs/split-deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# -f — остаёмся в foreground, чтобы systemd видел процесс и мог перезапустить.
+# reconnect/ServerAlive — переживаем обрывы сети без перемонтирования.
+ExecStartPre=-/usr/bin/fusermount3 -u /mnt/edge
+ExecStart=/usr/bin/sshfs -f \
+    -o IdentityFile=/root/.ssh/id_ed25519_webui_edge \
+    -o UserKnownHostsFile=/root/.ssh/known_hosts \
+    -o IdentitiesOnly=yes \
+    -o reconnect \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=3 \
+    root@138.124.180.251:/ /mnt/edge
+ExecStop=/usr/bin/fusermount3 -u /mnt/edge
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

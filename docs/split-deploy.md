@@ -282,6 +282,36 @@ docker exec open-terminal sh -c 'ssh-keyscan -t ed25519 172.18.0.1 >> /mnt/host/
 WebUI становится точкой, из которой достижим root обоих хостов (на RU он и так
 был через `docker.sock`), поэтому ключ ограничен `restrict,pty` и `from=`.
 
+### Файловый менеджер: файлы обоих хостов
+
+Файловый браузер `open-terminal` (`/files/list?directory=…`) ходит по любым
+путям контейнера, а корень RU виден в нём как `/mnt/host`. Чтобы там же были
+файлы edge, его корень монтируется по SSHFS на хосте RU:
+
+```bash
+apt-get install -y sshfs
+mkdir -p /mnt/edge
+# assets/host/systemd/sshfs-edge.service — ключ тот же, что у терминала
+install -m 644 assets/host/systemd/sshfs-edge.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now sshfs-edge
+ln -sfn mnt/edge /edge     # в браузере это /mnt/host/edge
+```
+
+Симлинк относительный, чтобы путь был одинаковым с обеих сторон: на хосте
+`/edge` ведёт в `/mnt/edge`, а в контейнере `/mnt/host/edge` — в
+`/mnt/host/mnt/edge`.
+
+`sshfs-edge.service` держит монтирование в foreground (`-f`) с `reconnect` и
+`ServerAliveInterval=15`, `Restart=on-failure`. Пересоздавать `open-terminal`
+после этого не нужно: bind `/` → `/mnt/host` наследует propagation, и
+перемонтирование доезжает до контейнера живьём (проверено `systemctl restart`
+при открытом браузере).
+
+Цена: браузер ходит в edge по SFTP, поэтому листинг больших каталогов
+(`/var/lib/docker`) заметно медленнее локального. Для `/root`, `/etc`, `/home`
+разницы не видно. Запись работает — правки конфигов можно делать прямо из
+браузера.
+
 ### Бэкапы на разделённых хостах
 
 `assets/stack/backup-databases.sh` сам определяет, какие БД доступны: на

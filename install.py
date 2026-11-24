@@ -988,6 +988,9 @@ class Installer:
             # vnstat: per-hour traffic history on the uplink — the only way to answer
             # "did the VPN users eat the channel" after the fact.
             "vnstat",
+            # sshfs: корень edge, примонтированный в /mnt/edge, виден файловому
+            # браузеру open-terminal как /mnt/host/edge (см. split-deploy.md).
+            "sshfs",
         ]
         have = []
         for pkg in base:
