@@ -1,0 +1,14 @@
+name = "hermes-uptime"
+main = "uptime-worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+[observability]
+enabled = true
+
+[[kv_namespaces]]
+binding = "STATE"
+id = "a8534f69d44248978ba0ad4017889b17"
+
+[triggers]
+crons = ["* * * * *"]

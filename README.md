@@ -223,7 +223,37 @@ Hub слушает только `127.0.0.1:8090`, наружу не публик
   лотереи — домен в своей зоне или другой ACME CA (Buypass/ZeroSSL).
 * Логин админа — `/etc/beszel-admin.env` (0600 root).
 
-### Внешний мониторинг: GitHub Actions (работает из коробки)
+### Внешний мониторинг
+
+Два независимых контура, оба живут вне хоста и оба пишут в Telegram-топик «VPS».
+
+#### Cloudflare Worker — основной (`hermes-uptime`, раз в минуту)
+
+Хост мёртв, сеть легла, провайдер выключил машину — воркер этого не замечает, он
+на краю Cloudflare. Каждую минуту проверяет `https://llm.esmien.ru/webui-health`
+(origin напрямую, nginx → WebUI) и `https://ai.esmien.ru/` (200 или 403), по две
+попытки на адрес.
+
+* Исходник и конфиг: `assets/cloudflare/uptime-worker.js`, `wrangler.toml`.
+* Алерт: бот из `notifications/.env`, chat `-1004410657647`, топик `2`.
+  Первое падение — «🔴 VPS не отвечает» с кодом адреса; пока лежит, повтор раз в
+  6 часов (без спама); восстановление — «🟢 VPS снова отвечает» с длительностью.
+* Состояние — KV `hermes-uptime-state`, ключ `state` (`{"status","last_alert"}`).
+* Токен: `/root/.secrets/cf-workers.ini` (Account → Workers Scripts: Edit +
+  Workers KV Storage: Edit). Подхватывается offsite-бэкапом секретов через glob
+  `/root/.secrets/*.ini`, руками ничего дописывать не нужно.
+* Деплой только через wrangler (`[triggers] crons` в `wrangler.toml`):
+  `cd assets/cloudflare && CLOUDFLARE_API_TOKEN=$(awk -F= '/CLOUDFLARE_API_TOKEN/{print $2}' /root/.secrets/cf-workers.ini) CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy`.
+* Диагностика: `curl https://hermes-uptime.esmien-hermes.workers.dev/` — живой
+  отчёт по адресам; `?drill=1` — тестовое сообщение `[ТЕСТ]` в топик;
+  `npx wrangler tail hermes-uptime` — видно каждый крон-прогон.
+* Грабли: скрипт, залитый через script API (`PUT /workers/scripts/<name>`), может
+  получить cron, который не срабатывает — триггеры ставить/обновлять только
+  wrangler'ом. `*.workers.dev` из РФ-сети иногда отдаёт `TLS handshake failure`,
+  через минуту проходит. Чтение KV через REST после записи из воркера может
+  отставать на десятки секунд.
+
+#### GitHub Actions — резервный (cron `*/10`)
 
 `.github/workflows/uptime.yml` cron `*/10 * * * *` дергает публичные домены
 **с раннеров GitHub** — то есть проверяет сервер снаружи, независимо от него.
@@ -237,10 +267,18 @@ chat 214062001) + письмо GitHub о падении воркфлоу.
 * **Публичные репо: GitHub отключает `schedule` после 60 дней без активности.**
   Поэтому `uptime-heartbeat.timer` раз в месяц дописывает строку в
   `maintainer/uptime-heartbeat.txt` — watcher коммитит, расписание живёт.
-* Точность: GitHub cron ходит с разбросом ±5–15 мин, обнаружение — до ~20 мин.
-  Нужно быстрее/точнее — второй контур на healthchecks.io (см. ниже).
+* Точность: GitHub троттлит `schedule` — по факту **2–4 прогона в сутки** (средний
+  интервал ~7 ч, худший ~10.5 ч, проверено по истории запусков). Контур держим как
+  резервный: если упадёт Cloudflare или отвалится токен воркера, он всё равно
+  напишет. Минутную точность даёт только воркер.
 
-### Внешний dead-man switch (healthchecks.io, опционально)
+### Внешний dead-man switch (healthchecks.io, третий контур — не настроен)
+
+Сейчас **не активен**: `DEADMAN_URL` не задан ни в `/etc/deadman-ping.url`, ни в
+`/home/ai_service/notifications/.env`, поэтому `deadman-ping.timer` пингует в
+пустоту (в журнале раз в сутки строка «DEADMAN_URL не задан»). Полное падение
+хоста уже ловит воркер, так что это не дыра, а необязательный третий контур —
+он полезен, если нужно ловить «хост жив, но стек болен» с внешней стороны.
 
 Внутренний мониторинг живёт на этой же машине и умирает вместе с ней. Чтобы
 узнавать о полном падении (хост, сеть, провайдер), есть `deadman-ping.timer`:
