@@ -1711,14 +1711,42 @@ def systemd_result(unit: str) -> str:
     return ", ".join(part for part in out.strip().splitlines() if part)
 
 
-def verify_backup() -> list[str]:
-    """Check the last nightly backup run and send a report to the message bot.
+BACKUP_LOCK_TIMEOUT_SECONDS = 600
+POSTGRES_BACKUP_DBS = ("litellm_db", "webui_db")
 
-    Returns the list of problems found so the caller can exit non-zero: the report
-    itself already went to Telegram, and a silent exit 0 made the nightly cron run
-    declare "проблем нет" while the report showed a failed restore.
-    """
+
+def verify_backup(dry_run: bool = False) -> list[str]:
+    """Check the nightly backup and report the problems, if any."""
     backup_dir = env_path("BACKUP_DIR", "/var/backups").resolve()
+    try:
+        fd = os.open(backup_dir, os.O_RDONLY | os.O_DIRECTORY)
+    except FileNotFoundError:
+        # The writer needs this directory too; retain the usual missing-dump report.
+        report, problems = _build_backup_verification(backup_dir)
+    except OSError as exc:
+        raise MonitorError(f"не удалось открыть каталог бэкапов: {exc}") from exc
+    else:
+        try:
+            # backup-databases.sh locks the same inode exclusively, including retention.
+            lock = subprocess.run(
+                ["/usr/bin/flock", "-s", "-w", str(BACKUP_LOCK_TIMEOUT_SECONDS), "-E", "75", str(fd)],
+                pass_fds=(fd,),
+            )
+            if lock.returncode == 75:
+                raise MonitorError(f"бэкап не освободил блокировку за {BACKUP_LOCK_TIMEOUT_SECONDS} с")
+            if lock.returncode != 0:
+                raise MonitorError(f"не удалось заблокировать каталог бэкапов (flock: {lock.returncode})")
+            report, problems = _build_backup_verification(backup_dir)
+        finally:
+            os.close(fd)
+    if dry_run:
+        print(report)
+    else:
+        send_long_message(report, parse_mode="HTML")
+    return problems
+
+
+def _build_backup_verification(backup_dir: Path) -> tuple[str, list[str]]:
     pattern = os.environ.get("BACKUP_PATTERN", "*.dump")
     now = time.time()
     lines = ["🔎 <b>ПРОВЕРКА НОЧНОГО БЭКАПА</b>", "─" * 40]
@@ -1754,7 +1782,11 @@ def verify_backup() -> list[str]:
     )
     groups: dict[str, list[Path]] = {}
     for path in files:
-        groups.setdefault(db_name_from_file(path), []).append(path)
+        name = db_name_from_file(path)
+        # A plain .dump is not a completed backup for these databases.
+        if name in POSTGRES_BACKUP_DBS and path.suffix != ".enc":
+            continue
+        groups.setdefault(name, []).append(path)
 
     lines.append("")
     lines.append("<b>Дампы:</b>")
@@ -1768,6 +1800,9 @@ def verify_backup() -> list[str]:
             f"  {'✅' if fresh else '❌'} {name}: {len(groups[name])} шт., "
             f"последний {newest.name} ({age_hours:.1f} ч назад)"
         )
+    for name in POSTGRES_BACKUP_DBS:
+        if name not in groups:
+            problems.append(f"{name}: нет зашифрованного дампа (.enc)")
 
     lines.append("")
     lines.append("<b>Восстановление (во временную БД):</b>")
@@ -1791,8 +1826,7 @@ def verify_backup() -> list[str]:
         lines.extend(f"  - {problem}" for problem in problems)
     else:
         lines.append("✅ Всё в порядке: дампы на месте и восстановлены во временную БД.")
-    send_long_message("\n".join(lines), parse_mode="HTML")
-    return problems
+    return "\n".join(lines), problems
 
 
 def send_text(text: str) -> None:
@@ -2036,7 +2070,8 @@ def main() -> int:
     backup_parser.add_argument(
         "--dry-run", action="store_true", help="показать план отправки, не обращаясь к Telegram"
     )
-    subparsers.add_parser("verify", help="проверить ночной бэкап и отправить отчёт в бот уведомлений")
+    verify_parser = subparsers.add_parser("verify", help="проверить ночной бэкап и отправить отчёт в бот уведомлений")
+    verify_parser.add_argument("--dry-run", action="store_true", help="проверить бэкап и вывести отчёт без Telegram")
     send_parser = subparsers.add_parser("send", help="отправить произвольный текст в бот уведомлений")
     send_parser.add_argument("text", help="текст сообщения")
     args = parser.parse_args()
@@ -2053,7 +2088,7 @@ def main() -> int:
         elif args.command == "backup":
             notify_backup(args.file, dry_run=args.dry_run)
         elif args.command == "verify":
-            problems = verify_backup()
+            problems = verify_backup(dry_run=args.dry_run)
             if problems:
                 print("verify: PROBLEMS: " + " | ".join(problems)[:800])
                 return 2

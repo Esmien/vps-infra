@@ -12,6 +12,13 @@ source "$ENV_FILE"
 set +a
 
 BACKUP_DIR="/home/ai_service/ai-stack/backups/postgres"
+# Lock the directory inode itself; monitor.py verify takes a shared lock on it.
+exec 9<"$BACKUP_DIR"
+if ! /usr/bin/flock -x -w 600 9; then
+    echo "Не удалось заблокировать каталог бэкапов: $BACKUP_DIR" >&2
+    exit 1
+fi
+
 # Retention is by count, not by date: keep the newest RETENTION_COUNT dumps of each
 # database and delete the rest, so several backups made on the same day still collapse
 # to the last RETENTION_COUNT.
