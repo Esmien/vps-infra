@@ -1,9 +1,4 @@
 #!/bin/bash
-# Ежедневный бэкап баз AI-стека: pg_dump -Fc -> шифрование dump-crypto -> retention.
-#
-# Скрипт один и тот же на обоих хостах разделённого стека: он сам определяет,
-# какие базы доступны локально, и пропускает отсутствующие (на RU есть только
-# webui_db, на зарубежном — только litellm_db). BACKUP_DBS может сузить список.
 set -euo pipefail
 
 cd "$(dirname "$0")" || exit 1
@@ -28,46 +23,41 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
 
-mkdir -p "$BACKUP_DIR"
-
 log "=== Starting database backup ==="
 
-# dump_db <db> <role> <password>
-# Пропускает базу, которой нет на этом хосте (разделённый стек), и падает только
-# на реальной ошибке pg_dump/шифрования.
-dump_db() {
-    local db="$1" role="$2" pass="$3"
-    export PGPASSWORD="$pass"
-    if ! psql -h localhost -U "$role" -d "$db" -tAc 'select 1' >/dev/null 2>&1; then
-        log "skip $db: роли/базы нет на этом хосте"
-        return 0
-    fi
-    log "Backing up $db..."
-    if ! pg_dump -h localhost -U "$role" -d "$db" -F c -f "$BACKUP_DIR/${db}_${TIMESTAMP}.dump"; then
-        log "✗ $db backup failed"
-        exit 1
-    fi
-    chmod 600 "$BACKUP_DIR/${db}_${TIMESTAMP}.dump"
-    log "✓ $db backed up successfully"
+export PGPASSWORD="$WEBUI_DB_PASSWORD"
+log "Backing up webui_db..."
+if pg_dump -h localhost -U webui -d webui_db -F c -f "$BACKUP_DIR/webui_db_${TIMESTAMP}.dump"; then
+    chmod 600 "$BACKUP_DIR/webui_db_${TIMESTAMP}.dump"
+    log "✓ webui_db backed up successfully"
     # Открытый дамп живёт секунды: шифруем тем же ключом, что и офсайт-копию секретов,
     # и оставляем на диске только .enc (в дампе лежат все чаты пользователей).
-    if /usr/local/bin/dump-crypto encrypt "$BACKUP_DIR/${db}_${TIMESTAMP}.dump" >>"$LOG_FILE" 2>&1; then
-        log "✓ $db encrypted"
+    if /usr/local/bin/dump-crypto encrypt "$BACKUP_DIR/webui_db_${TIMESTAMP}.dump" >>"$LOG_FILE" 2>&1; then
+        log "✓ webui_db encrypted"
     else
-        log "✗ $db encryption failed — открытый дамп оставлен на месте"
+        log "✗ webui_db encryption failed — открытый дамп оставлен на месте"
         exit 1
     fi
-}
+else
+    log "✗ webui_db backup failed"
+    exit 1
+fi
 
-for pair in "webui_db:webui:WEBUI_DB_PASSWORD" "litellm_db:litellm:LITELLM_DB_PASSWORD"; do
-    IFS=: read -r db role var <<<"$pair"
-    if [[ -n "${BACKUP_DBS:-}" && " $BACKUP_DBS " != *" $db "* ]]; then
-        log "skip $db: не входит в BACKUP_DBS"
-        continue
+export PGPASSWORD="$LITELLM_DB_PASSWORD"
+log "Backing up litellm_db..."
+if pg_dump -h localhost -U litellm -d litellm_db -F c -f "$BACKUP_DIR/litellm_db_${TIMESTAMP}.dump"; then
+    chmod 600 "$BACKUP_DIR/litellm_db_${TIMESTAMP}.dump"
+    log "✓ litellm_db backed up successfully"
+    if /usr/local/bin/dump-crypto encrypt "$BACKUP_DIR/litellm_db_${TIMESTAMP}.dump" >>"$LOG_FILE" 2>&1; then
+        log "✓ litellm_db encrypted"
+    else
+        log "✗ litellm_db encryption failed — открытый дамп оставлен на месте"
+        exit 1
     fi
-    # shellcheck disable=SC2154  # переменные приходят из .env через source
-    dump_db "$db" "$role" "${!var}"
-done
+else
+    log "✗ litellm_db backup failed"
+    exit 1
+fi
 
 log "Cleaning up: keeping the newest $RETENTION_COUNT dump(s) per database..."
 DELETED=0
