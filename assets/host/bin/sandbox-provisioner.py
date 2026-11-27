@@ -214,6 +214,20 @@ def _managed_only(text: str) -> bool:
     return all(_norm_lines(line) in known for line in text.splitlines() if line.strip())
 
 
+def _foreign_lines(text: str) -> str:
+    """Строки, которых нет в шаблоне, — пользовательские: их нельзя терять."""
+    known = {_norm_lines(line) for line in (LEGACY_AGENTS_TEXT + "\n" + AGENTS_BODY).splitlines() if line.strip()}
+    kept: list[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        stripped = _norm_lines(line)
+        if not stripped or stripped in known or stripped in seen:
+            continue
+        seen.add(stripped)
+        kept.append(line.rstrip())
+    return "\n".join(kept)
+
+
 def merge_agents_block(existing: str) -> str:
     """Заменить управляемый блок, сохранив собственный текст пользователя."""
     def strip_header(text: str) -> str:
@@ -224,7 +238,13 @@ def merge_agents_block(existing: str) -> str:
     end = existing.find(AGENTS_BLOCK_END)
     if begin != -1 and end > begin:
         prefix = strip_header(existing[:begin])
+        inner = existing[begin + len(AGENTS_BLOCK_BEGIN):end]
         tail = existing[end + len(AGENTS_BLOCK_END):]
+        # Пользовательский текст, случайно оказавшийся внутри управляемого блока,
+        # не выбрасываем: переносим его в хвост, иначе он пропадёт без следа.
+        rescued = _foreign_lines(inner)
+        if rescued:
+            tail = tail.rstrip("\n") + "\n\n" + rescued + "\n"
         # Старый управляемый текст, оставшийся перед блоком, не должен жить рядом с новым.
         if not prefix.strip() or _managed_only(prefix):
             prefix = ""
@@ -343,14 +363,14 @@ def api(method: str, path: str, payload=None):
 
 
 def get_connections() -> list[dict]:
-    res = api("GET", "/api/v1/configs/terminal_servers")
+    res = api("GET", "/api/v1/configs/machines")
     if isinstance(res, list):
         return res
-    return res.get("TERMINAL_SERVER_CONNECTIONS", [])
+    return res.get("MACHINE_CONNECTIONS") or res.get("TERMINAL_SERVER_CONNECTIONS") or []
 
 
 def set_connections(conns: list[dict]) -> None:
-    api("POST", "/api/v1/configs/terminal_servers", {"TERMINAL_SERVER_CONNECTIONS": conns})
+    api("POST", "/api/v1/configs/machines", {"MACHINE_CONNECTIONS": conns})
 
 
 def desired_connection(entry: dict) -> dict:
