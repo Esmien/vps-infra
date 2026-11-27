@@ -12,8 +12,11 @@ HEALTH_TIMEOUT=120
 
 log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >>"$LOG"; }
 
-touch "$PAUSE"
-cleanup() { rm -f "$PAUSE"; }
+# pause-флаг снимаем только если поставили его сами: чужой (владельца, другого
+# агента) трогать нельзя — иначе ручной стоп lyria снова превратится в инциденты
+PAUSE_CREATED=0
+if [[ ! -e "$PAUSE" ]]; then touch "$PAUSE"; PAUSE_CREATED=1; fi
+cleanup() { if (( PAUSE_CREATED )); then rm -f "$PAUSE"; fi; }
 trap cleanup EXIT
 
 before=$(docker inspect "$CONTAINER" --format '{{.State.Health.Status}} rss_unknown')

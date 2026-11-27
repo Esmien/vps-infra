@@ -7,15 +7,15 @@
 картинку в base64 и текст PDF, но не сам файл — «не могу получить исходник».
 
 Что делает патч:
-  1) в тег <file .../> добавляет path="..." — путь оригинала, как его видит
-     агент (/home/user/workspace/files/input/<имя>, рядом с files/output);
-  2) перед этим копирует upload в <sandbox>/files/input (lazy, при первом
-     упоминании файла в запросе). Копия делается один раз: если файл уже есть
-     с тем же размером — не трогаем, чтобы не затереть правки агента.
+  1) проверяет выбранную машину, её штатную авторизацию и принадлежность upload;
+  2) копирует файл пользователя в его <sandbox>/files/input без перехода по
+     симлинкам, с UUID в имени; существующие изменённые файлы не затирает;
+  3) возвращает путь глазами выбранного терминала: для личной песочницы —
+     /home/user/workspace/files/input, для Root Terminal — тот же каталог
+     через /mnt/host. Для прочих машин или при сомнении путь не выдаётся.
 
-Правила слаг-а те же, что в sandbox-provisioner.py и terminal-autoselect.js:
-локальная часть email, [^a-z0-9]+ -> '-', обрезка 24.
-
+Данные пользователя и conn_id берутся из /sandbox-state/state.json;
+обычному пользователю доступ к Root Terminal этим патчем не выдаётся.
 user в pipeline — pydantic UserModel, а не dict: читаем и атрибуты, и ключи.
 
 Fail closed: если апстрим переименует функции — сборка падает.
@@ -44,115 +44,174 @@ SANDBOX_INPUT_SUBDIR = 'files/input'
 SANDBOX_AGENT_INPUT = '/home/user/workspace/files/input'
 
 
-def _sandbox_slug(email: str | None) -> str:
-    """Slug песочницы пользователя: та же схема, что в sandbox-provisioner.py."""
-    local = (email or '').split('@')[0].lower()
-    return re.sub(r'^-+|-+$', '', re.sub(r'[^a-z0-9]+', '-', local))[:24]
-
-
 def _user_field(user, key: str):
-    """user приходит и dict-ом, и pydantic-моделью UserModel."""
     if isinstance(user, dict):
         return user.get(key)
     return getattr(user, key, None)
 
 
-def _mirror_upload_for_user(file: dict, user) -> str | None:
-    """Копирует upload в <sandbox>/files/input, возвращает путь глазами агента.
+async def _prepare_mirror_context(request, form_data, metadata, user):
+    """Resolve an authorized selected machine and file ownership; fail closed."""
+    try:
+        from uuid import UUID
+        from open_webui.models.files import Files
+        from open_webui.utils.machines import find_machine_connection
+        import inspect
 
-    None — если копировать нечего/некуда (нет песочницы, файл не upload).
-    """
-    if not isinstance(file, dict) or user is None:
+        if 'machine_id' in form_data:
+            machine_id = form_data.get('machine_id')
+        elif 'terminal_id' in form_data:
+            machine_id = form_data.get('terminal_id')
+        else:
+            machine_id = metadata.get('machine_id')
+        user_id = _user_field(user, 'id')
+        if not isinstance(machine_id, str) or not user_id:
+            return None
+        connection = await find_machine_connection(user, machine_id, metadata, request=request)
+        if not connection or not connection.get('enabled', True):
+            return None
+        with open('/sandbox-state/state.json', encoding='utf-8') as f:
+            state = json.load(f)
+        entry = state.get(user_id) or {}
+        slug = entry.get('slug')
+        if not isinstance(slug, str) or not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', slug):
+            return None
+        if entry.get('user_id') != user_id or not entry.get('active'):
+            return None
+        if entry.get('dir') != f'/home/ai_service/sandbox/users/{slug}':
+            return None
+        url = (connection.get('url') or '').rstrip('/')
+        if machine_id == entry.get('conn_id') and url == f'http://ot-u-{slug}:8000':
+            agent_dir = SANDBOX_AGENT_INPUT
+        elif _user_field(user, 'role') == 'admin' and url == 'http://open-terminal:8000':
+            agent_dir = f'/mnt/host/home/ai_service/sandbox/users/{slug}/files/input'
+        else:
+            return None
+        sandbox_dir = os.path.join(SANDBOX_USERS_ROOT, slug)
+        if not os.path.isdir(sandbox_dir) or os.path.islink(sandbox_dir):
+            return None
+        ids = set()
+        for message in form_data.get('messages', []):
+            if not isinstance(message, dict) or message.get('role') != 'user':
+                continue
+            for file in message.get('files') or []:
+                if not isinstance(file, dict):
+                    continue
+                file_id = file.get('id')
+                try:
+                    if not isinstance(file_id, str) or str(UUID(file_id)) != file_id:
+                        continue
+                except (ValueError, AttributeError):
+                    continue
+                ids.add(file_id)
+        allowed = set()
+        for file_id in ids:
+            result = Files.get_file_by_id_and_user_id(file_id, user_id)
+            owned = await result if inspect.isawaitable(result) else result
+            if owned:
+                allowed.add(file_id)
+        return {'sandbox_dir': sandbox_dir, 'agent_dir': agent_dir, 'allowed': allowed}
+    except Exception as e:
+        log.warning('sandbox mirror context unavailable: %s', type(e).__name__)
         return None
 
-    file_id = file.get('id') or file.get('url')
+
+def _mirror_upload_for_user(file: dict, user, mirror_context=None) -> str | None:
+    """Mirror owned uploads only to the selected, authorized machine."""
+    if not isinstance(file, dict) or not mirror_context:
+        return None
+    file_id = file.get('id')
     name = file.get('name') or file.get('filename') or ''
-    if not isinstance(file_id, str) or not file_id or not isinstance(name, str) or not name:
+    if not isinstance(file_id, str) or file_id not in mirror_context['allowed'] or not isinstance(name, str):
         return None
-
-    slug = _sandbox_slug(_user_field(user, 'email'))
-    if not slug:
-        return None
-
-    sandbox_dir = os.path.join(SANDBOX_USERS_ROOT, slug)
-    if not os.path.isdir(sandbox_dir):
-        return None
-
     safe_name = os.path.basename(name).replace('\\x00', '').strip()
     if not safe_name or safe_name in ('.', '..'):
         return None
-
     from open_webui.env import DATA_DIR
-
-    uploads_source = DATA_DIR / 'uploads'
-    extension = os.path.splitext(safe_name)[1]
-    source = next(
-        (
-            path
-            for path in (
-                uploads_source / f'{file_id}_{safe_name}',
-                uploads_source / f'{file_id}{extension}',
-            )
-            if path.is_file()
-        ),
-        None,
-    )
+    import stat
+    import hashlib
+    source_root = DATA_DIR / 'uploads'
+    ext = os.path.splitext(safe_name)[1]
+    source = next((p for p in (source_root / f'{file_id}_{safe_name}', source_root / f'{file_id}{ext}')
+                   if p.is_file() and not p.is_symlink()), None)
     if source is None:
         return None
-
-    input_dir = os.path.join(sandbox_dir, SANDBOX_INPUT_SUBDIR)
-    target = os.path.join(input_dir, safe_name)
-    agent_path = f'{SANDBOX_AGENT_INPUT}/{safe_name}'
-
+    # ID avoids name collisions; O_NOFOLLOW prevents a sandbox user redirecting writes.
+    target_name = f'{file_id}_{safe_name}'
+    agent_path = f"{mirror_context['agent_dir']}/{target_name}"
+    fd = None
+    current = None
+    temp_name = None
     try:
-        source_size = source.stat().st_size
-        if os.path.exists(target):
-            if os.path.getsize(target) == source_size:
-                return agent_path
-            # То же имя, другой файл: не затираем, кладём рядом с префиксом id.
-            safe_name = f'{file_id[:8]}_{safe_name}'
-            target = os.path.join(input_dir, safe_name)
-            agent_path = f'{SANDBOX_AGENT_INPUT}/{safe_name}'
-            if os.path.exists(target):
-                return agent_path
-
-        created = not os.path.isdir(input_dir)
-        os.makedirs(input_dir, exist_ok=True)
-        try:
-            # Владелец — как у самой песочницы: агент должен мочь файл заменить.
-            sandbox_stat = os.stat(sandbox_dir)
-        except OSError:
-            sandbox_stat = None
-
-        if created and sandbox_stat is not None:
-            # files/ могла не существовать: обе новые директории — агенту.
-            for directory in (os.path.dirname(input_dir), input_dir):
-                try:
-                    os.chown(directory, sandbox_stat.st_uid, sandbox_stat.st_gid)
-                except OSError:
-                    pass
-
-        shutil.copyfile(source, target)
-        os.chmod(target, 0o644)
-        if sandbox_stat is not None:
+        current = os.open(mirror_context['sandbox_dir'], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        sandbox_stat = os.fstat(current)
+        for part in ('files', 'input'):
             try:
-                os.chown(target, sandbox_stat.st_uid, sandbox_stat.st_gid)
-            except OSError:
+                os.mkdir(part, 0o755, dir_fd=current)
+                os.chown(part, sandbox_stat.st_uid, sandbox_stat.st_gid, dir_fd=current, follow_symlinks=False)
+            except FileExistsError:
                 pass
+            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current)
+            os.close(current)
+            current = next_fd
+        # Check the type before opening: reading a FIFO would block the request forever.
+        try:
+            existing_mode = os.stat(target_name, dir_fd=current, follow_symlinks=False).st_mode
+        except FileNotFoundError:
+            existing_mode = None
+        if existing_mode is not None:
+            if not stat.S_ISREG(existing_mode):
+                log.warning('sandbox mirror target is not a regular file: %s', file_id)
+                return None
+            try:
+                existing_fd = os.open(target_name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=current)
+            except OSError:
+                return None
+            try:
+                if not stat.S_ISREG(os.fstat(existing_fd).st_mode):
+                    return None
+                with os.fdopen(existing_fd, 'rb') as existing, open(source, 'rb') as original:
+                    existing_fd = None
+                    same = hashlib.file_digest(existing, 'sha256').digest() == hashlib.file_digest(original, 'sha256').digest()
+                return agent_path if same else None
+            finally:
+                if existing_fd is not None:
+                    os.close(existing_fd)
+        # Copy under a temp name and rename atomically: a failed copy must never
+        # leave a truncated file that a later retry would mistake for the real one.
+        from uuid import uuid4
+        temp_name = f'.{target_name}.{uuid4().hex}.tmp'
+        fd = os.open(temp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=current)
+        os.fchown(fd, sandbox_stat.st_uid, sandbox_stat.st_gid)
+        with open(source, 'rb') as original, os.fdopen(fd, 'wb') as output:
+            fd = None
+            shutil.copyfileobj(original, output)
+            output.flush()
+            os.fsync(output.fileno())
+        # Publish atomically without replacing a file created during the copy.
+        # Both names are in the same directory/filesystem; link fails closed
+        # with EEXIST even if another writer wins after our initial stat.
+        os.link(temp_name, target_name, src_dir_fd=current, dst_dir_fd=current, follow_symlinks=False)
+        os.unlink(temp_name, dir_fd=current)
+        temp_name = None
+        return agent_path
     except OSError as e:
         log.warning('sandbox file mirror failed for %s: %s', file_id, e)
         return None
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if temp_name is not None and current is not None:
+            try:
+                os.unlink(temp_name, dir_fd=current)
+            except OSError:
+                pass
+        if current is not None:
+            os.close(current)
 
-    return agent_path
 
-
-def add_file_context(messages: list, user=None) -> list:
-    """
-    Replay attachment references beside their original user messages for native tools.
-
-    Files mirrored into the user's sandbox carry path="..." pointing at the real
-    upload, readable by the builtin terminal tools.
-    """
+def add_file_context(messages: list, user=None, mirror_context=None) -> list:
+    """Add attachment context with paths only for safe, authorized mirrors."""
 
     def format_file_tag(file, sandbox_path=None):
         attrs = {'type': file.get('type', 'file'), 'id': file.get('id') or file.get('url')}
@@ -163,6 +222,7 @@ def add_file_context(messages: list, user=None) -> list:
             '<file ' + ' '.join(f'{key}="{html.escape(str(value), quote=True)}"' for key, value in attrs.items()) + '/>'
         )
 '''
+
 
 OLD_LOOP = '''        if not attached_files:
             continue
@@ -176,12 +236,13 @@ NEW_LOOP = '''        if not attached_files:
 
         sandbox_paths = {}
         for file in attached_files:
-            mirrored = _mirror_upload_for_user(file, user)
+            mirrored = _mirror_upload_for_user(file, user, mirror_context)
             if mirrored:
                 sandbox_paths[file.get('id') or file.get('url')] = mirrored
 
         file_tags = [
-            format_file_tag(file, sandbox_paths.get(file.get('id') or file.get('url'))) for file in attached_files
+            format_file_tag(file, sandbox_paths.get(file.get('id')) if isinstance(file.get('id'), str) else None)
+            for file in attached_files
         ]
         file_context = '<attached_files>\\n' + '\\n'.join(file_tags) + '\\n</attached_files>\\n\\n'
         if sandbox_paths:
@@ -199,10 +260,11 @@ NEW_SIGNATURE = '''def process_messages_with_output(
     reasoning_format: str | None = None,
     include_file_context: bool = False,
     user=None,
+    mirror_context=None,
 ) -> list[dict]:'''
 
 OLD_CALLS = [
-    ('        add_file_context(processed)\n', '        add_file_context(processed, user=user)\n'),
+    ('        add_file_context(processed)\n', '        add_file_context(processed, user=user, mirror_context=mirror_context)\n'),
     (
         '''                        process_messages_with_output(
                             compacted,
@@ -214,6 +276,7 @@ OLD_CALLS = [
                             reasoning_format=get_reasoning_format(model),
                             include_file_context=metadata['include_file_context'],
                             user=user,
+                            mirror_context=mirror_context,
                         )''',
     ),
     (
@@ -222,11 +285,13 @@ OLD_CALLS = [
         reasoning_format=get_reasoning_format(model),
         include_file_context=metadata['include_file_context'],
     )''',
-        '''    form_data['messages'] = process_messages_with_output(
+        '''    mirror_context = await _prepare_mirror_context(request, form_data, metadata, user) if metadata['include_file_context'] else None
+    form_data['messages'] = process_messages_with_output(
         form_data.get('messages', []),
         reasoning_format=get_reasoning_format(model),
         include_file_context=metadata['include_file_context'],
         user=user,
+        mirror_context=mirror_context,
     )''',
     ),
 ]
@@ -273,9 +338,9 @@ def main() -> int:
     check = TARGET.read_text(encoding='utf-8')
     for needle in (
         MARKER,
-        'def add_file_context(messages: list, user=None)',
-        'add_file_context(processed, user=user)',
-        "agent_path = f'{SANDBOX_AGENT_INPUT}",
+        'def add_file_context(messages: list, user=None, mirror_context=None)',
+        'add_file_context(processed, user=user, mirror_context=mirror_context)',
+        "agent_path = f\"{mirror_context['agent_dir']}",
         '_user_field(user, ',
     ):
         if needle not in check:

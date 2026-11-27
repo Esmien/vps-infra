@@ -23,8 +23,8 @@
 # Глобальный ARG (объявлен ДО первого FROM, иначе в FROM не виден).
 # Пиннинг по дайджесту: :main — rolling-тег, один и тот же тег со временем
 # указывает на разный код. Дайджест фиксирует конкретную сборку.
-# Текущая база: Open WebUI v0.13.3 (2026-11-08).
-ARG OPENWEBUI_BASE=ghcr.io/open-webui/open-webui@sha256:46b59158e6558eeb980bc828e0f1b30238ad24d82ed84d5e5eda1dab2a082f14
+# Текущая база: Open WebUI v0.13.5.
+ARG OPENWEBUI_BASE=ghcr.io/open-webui/open-webui@sha256:e0dc5a8bf5c71cadf339d1e7b9408b357da75fb2854f82cad57a1609fadf2a22
 
 # ── stage 1: генерация всех ассетов брендинга из двух исходников ─────────────
 FROM python:3.12-slim AS assets
