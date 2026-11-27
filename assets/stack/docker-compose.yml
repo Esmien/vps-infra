@@ -128,6 +128,14 @@ services:
       - /root/open-terminal-config/chroot-host:/usr/local/bin/chroot-host
     environment:
       OPEN_TERMINAL_API_KEY: ${OPEN_TERMINAL_API_KEY}
+      # Встроенный Chromium-браузер выключен: вкладка Browser — это настоящий
+      # Chromium kiosk на виртуальном X, ~1.1 ГБ RSS на вкладку. В общем
+      # контейнере с лимитом 2 ГБ вторая одновременная вкладка даёт OOM и
+      # убивает чужой процесс в той же cgroup. Для чтения страниц есть
+      # Workspace Tool `web_browser` (Playwright, ~190 МБ), для интерактива
+      # с браузером — персональные песочницы, где лимит свой.
+      # Откат: убрать строку и `docker compose up -d --no-deps open-terminal`.
+      OPEN_TERMINAL_ENABLE_BROWSER: "false"
       # Возврат памяти ОС: glibc по умолчанию держит освобождённые арены и heap только растёт.
       # Порог trim 128 КБ + mmap для крупных блоков + 2 арены вместо N по числу потоков.
       MALLOC_TRIM_THRESHOLD_: "131072"
