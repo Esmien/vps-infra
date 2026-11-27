@@ -231,8 +231,12 @@ OLD_CALLS = [
     ),
 ]
 
-OLD_IMPORTS = 'import random\nimport re\nimport sys\n'
-NEW_IMPORTS = 'import random\nimport re\nimport shutil\nimport sys\n'
+# Якорь импортов меняется от версии к версии (0.13.5 убрал `import random`).
+# Берём первый совпавший вариант, иначе сборка падает — молча без shutil нельзя.
+IMPORT_ANCHORS = [
+    ('import random\nimport re\nimport sys\n', 'import random\nimport re\nimport shutil\nimport sys\n'),
+    ('import re\nimport sys\n', 'import re\nimport shutil\nimport sys\n'),
+]
 
 
 def main() -> int:
@@ -242,7 +246,7 @@ def main() -> int:
         print('patch already applied; nothing to do')
         return 0
 
-    for needle in (OLD_HEAD, OLD_LOOP, OLD_SIGNATURE, OLD_IMPORTS):
+    for needle in (OLD_HEAD, OLD_LOOP, OLD_SIGNATURE):
         if needle not in source:
             print(f'FAIL: upstream block not found:\n{needle[:200]}')
             return 1
@@ -250,7 +254,13 @@ def main() -> int:
     source = source.replace(OLD_HEAD, NEW_HEAD, 1)
     source = source.replace(OLD_LOOP, NEW_LOOP, 1)
     source = source.replace(OLD_SIGNATURE, NEW_SIGNATURE, 1)
-    source = source.replace(OLD_IMPORTS, NEW_IMPORTS, 1)
+    for old_imports, new_imports in IMPORT_ANCHORS:
+        if old_imports in source:
+            source = source.replace(old_imports, new_imports, 1)
+            break
+    else:
+        print('FAIL: import anchor not found for any known layout')
+        return 1
 
     for old, new in OLD_CALLS:
         if old not in source:

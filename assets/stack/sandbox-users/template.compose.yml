@@ -6,7 +6,7 @@
 services:
   terminal:
     # Пин по дайджесту: :latest — rolling-тег, тот же тег со временем указывает на другой код.
-    image: ghcr.io/open-webui/open-terminal@sha256:81a5394b3cd4ae32adb600f2135f09ee124de37f26b0a780e2f5692472c0fc5c
+    image: ghcr.io/open-webui/open-terminal@sha256:58037fb1af52ae89df67b533c00594a4a4ebedf880a757de4c6e0d3dcb095b6d
     container_name: ot-u-${SB_SLUG}
     restart: always
     user: "1000:1000"

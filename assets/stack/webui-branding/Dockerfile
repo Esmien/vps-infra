@@ -87,8 +87,17 @@ RUN sed -i 's|<link rel="stylesheet" href="/static/custom.css" crossorigin="use-
 #    отдаётся /static/*.
 COPY terminal-autoselect.js /app/build/static/terminal-autoselect.js
 COPY terminal-autoselect.js /app/backend/open_webui/static/terminal-autoselect.js
-RUN sed -i 's|<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />|<script src="/static/terminal-autoselect.js?v=2" crossorigin="use-credentials"></script>\n\t\t&|' /app/build/index.html \
- && grep -q "terminal-autoselect.js?v=2" /app/build/index.html
+RUN sed -i 's|<link rel="stylesheet" href="/static/custom.css" crossorigin="use-credentials" />|<script src="/static/terminal-autoselect.js?v=3" crossorigin="use-credentials"></script>\n\t\t&|' /app/build/index.html \
+ && grep -q "terminal-autoselect.js?v=3" /app/build/index.html
+
+# 5) Своя надстройка над темой: чуть больше блюра и меньше прозрачности
+#    (обои, поле ввода, рейл-сайдбар). Штатный custom.css в образе пустой,
+#    поэтому перекрываем его своим в обоих местах и поднимаем ?v=, чтобы
+#    браузеры не взяли закэшированный пустой файл.
+COPY custom.css /app/build/static/custom.css
+COPY custom.css /app/backend/open_webui/static/custom.css
+RUN sed -i 's|href="/static/custom.css"|href="/static/custom.css?v=5"|' /app/build/index.html \
+ && grep -q "custom.css?v=5" /app/build/index.html
 
 LABEL org.opencontainers.image.title="Esmien AI (derived from Open WebUI)" \
       org.opencontainers.image.description="Open WebUI с кастомным брендингом Esmien AI" \

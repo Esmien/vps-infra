@@ -1841,7 +1841,6 @@ BOT_HELP = (
     "/healthcheck — проверка работоспособности бота (ответ 200, статус ок)\n"
     "/docker_ps — сводка по Docker-контейнерам (статус и uptime/downtime)\n"
     "/backups — дайджест последнего бэкапа БД (результат ночного прогона)\n"
-    "/opencode — ссылка и QR для входа в opencode-сервер (код одноразовый, 5 минут)\n"
     "/help — эта справка"
 )
 
@@ -1886,76 +1885,6 @@ def bot_healthcheck(chat_id: str | None = None) -> None:
     send_telegram("200. Статус: ок", parse_mode=None, chat_id=chat_id)
 
 
-OPENCODE_PAIR_LINK_BIN = "opencode-pair-link"
-
-
-def _opencode_env() -> dict[str, str]:
-    """Окружение без TMPDIR: opencode-шелл падает, если TMPDIR указывает в недоступный путь."""
-    return {key: value for key, value in os.environ.items() if key not in ("TMPDIR", "TMP", "TEMP")}
-
-
-def opencode_pair_link() -> str:
-    """Одноразовая ссылка входа в self-hosted opencode (живёт 5 минут, гасится первым открытием)."""
-    binary = os.environ.get("OPENCODE_PAIR_LINK") or shutil.which(OPENCODE_PAIR_LINK_BIN)
-    if not binary:
-        raise MonitorError(f"Не найден {OPENCODE_PAIR_LINK_BIN} — вход в opencode не выпустить.")
-    try:
-        result = subprocess.run(
-            [binary], capture_output=True, text=True, timeout=25, env=_opencode_env()
-        )
-    except (subprocess.SubprocessError, OSError) as exc:
-        raise MonitorError(f"Не удалось выпустить код opencode: {exc}") from exc
-    link = (result.stdout or "").strip().splitlines()[-1].strip() if result.stdout else ""
-    if result.returncode != 0 or not link.startswith("http"):
-        error = (result.stderr or "").strip().rsplit("\n", 1)[-1]
-        raise MonitorError(f"opencode-pair-link вернул ошибку: {error or 'rc=' + str(result.returncode)}")
-    return link
-
-
-def opencode_qr_png(link: str) -> Path:
-    """PNG с QR: файлом, а не фото — Telegram пережимает картинки и 1-bit QR теряет читаемость."""
-    qrencode = shutil.which("qrencode") or "/usr/bin/qrencode"
-    qr_path = Path(tempfile.mkdtemp(prefix="opencode-qr-")) / "opencode-pair.png"
-    try:
-        result = subprocess.run(
-            [qrencode, "-o", str(qr_path), "-s", "14", "-m", "3", "-l", "M", link],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-    except (subprocess.SubprocessError, OSError) as exc:
-        raise MonitorError(f"Не удалось сгенерировать QR: {exc}") from exc
-    if result.returncode != 0 or not qr_path.exists():
-        raise MonitorError(f"qrencode вернул ошибку: {(result.stderr or '').strip() or result.returncode}")
-    return qr_path
-
-
-def opencode_pair(chat_id: str) -> None:
-    """Прислать вход в opencode: QR картинкой + ссылку текстом."""
-    link = opencode_pair_link()
-    token = os.environ.get("BOT_TOKEN")
-    qr_path = opencode_qr_png(link)
-    try:
-        # В подписи нет URL: превью-бот мессенджера дёрнет ссылку и сожжёт одноразовый код.
-        send_document(
-            token,
-            chat_id,
-            qr_path,
-            caption="🔑 Вход в opencode — QR\n"
-            "Код одноразовый и живёт 5 минут. Ссылка в следующем сообщении.",
-        )
-    finally:
-        shutil.rmtree(qr_path.parent, ignore_errors=True)
-    send_telegram(
-        "🔗 <b>Ссылка для входа в opencode</b>\n"
-        f"<code>{html.escape(link)}</code>\n\n"
-        "Действует 5 минут и только один раз. Нужен новый — /opencode.",
-        parse_mode="HTML",
-        chat_id=chat_id,
-        disable_preview=True,
-    )
-
-
 def handle_bot_message(chat_id: str, text: str) -> None:
     command = text.split()[0].split("@")[0].lower() if text.split() else ""
     if command == "/health":
@@ -1966,13 +1895,11 @@ def handle_bot_message(chat_id: str, text: str) -> None:
         docker_ps(chat_id=chat_id)
     elif command == "/backups":
         backup_summary(chat_id=chat_id)
-    elif command == "/opencode":
-        opencode_pair(chat_id)
     elif command in ("/start", "/help"):
         send_telegram(BOT_HELP, parse_mode="HTML", chat_id=chat_id)
     else:
         send_telegram(
-            "Неизвестная команда. Доступно: /health, /healthcheck, /docker_ps, /backups, /opencode, /help.",
+            "Неизвестная команда. Доступно: /health, /healthcheck, /docker_ps, /backups, /help.",
             parse_mode=None,
             chat_id=chat_id,
         )

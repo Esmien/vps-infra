@@ -110,7 +110,9 @@ services:
       - stack-net
 
   open-terminal:
-    image: ghcr.io/open-webui/open-terminal:latest
+    # Пин по дайджесту (0.18.8, 2026-11-27): :latest — rolling-тег.
+    # Откат: esmien/open-terminal:rollback-0.14.0.
+    image: ghcr.io/open-webui/open-terminal@sha256:58037fb1af52ae89df67b533c00594a4a4ebedf880a757de4c6e0d3dcb095b6d
     container_name: open-terminal
     restart: always
     mem_limit: 2g           # потолок на случай runaway; в норме heap ~2 ГБ под конец дня

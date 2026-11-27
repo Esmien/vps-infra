@@ -1,0 +1,55 @@
+/*
+ * Esmien AI — тонкая настройка «стекла» (по просьбе владельца: чуть больше блюра,
+ * чуть меньше прозрачности, ~8%).
+ *
+ * ВАЖНО: значения для тёмной темы НЕ должны применяться в светлой. Если задать
+ * цвет без привязки к теме, в светлой теме поле ввода останется тёмным, а рейл
+ * получит тёмную подложку поверх белого — интерфейс «выцветает». Поэтому все
+ * цветовые правки строго под html.dark, а светлая тема получает свою пару.
+ *
+ * Фон интерфейса может быть картинкой (ui.backgroundImageUrl) — она лежит
+ * инлайновым data-URL в div, поэтому селектор `div[style*="data:image"]`.
+ */
+
+/* Тёмная тема: сохраняем прежнее оформление обоев. Светлую не размываем. */
+html.dark div[style*="data:image"] {
+	filter: blur(9px) brightness(0.93) saturate(0.95);
+}
+
+/* 2. Поле ввода */
+#message-input-container {
+	backdrop-filter: blur(16px);
+	-webkit-backdrop-filter: blur(16px);
+}
+
+/* Цвет поля следует палитре пользователя, а не фиксированному белому/чёрному. */
+html.dark #message-input-container {
+	background-color: color-mix(in srgb, var(--color-base-850) 96%, transparent) !important;
+}
+
+html:not(.dark) #message-input-container {
+	background-color: color-mix(in srgb, var(--color-base-50) 94%, transparent) !important;
+	border-color: color-mix(in srgb, var(--color-base-900) 12%, transparent) !important;
+}
+
+/* Сайдбар использует палитру выбранной темы, а не фиксированный серый. */
+html.dark #sidebar {
+	background-color: color-mix(in srgb, var(--color-base-950) 92%, transparent) !important;
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
+}
+
+html:not(.dark) #sidebar {
+	background-color: color-mix(in srgb, var(--color-base-50) 92%, transparent) !important;
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
+}
+
+/* Подписи разделов должны читаться на светлой панели. */
+html:not(.dark) #sidebar :is(#sidebar-channels-button, #sidebar-folders-button, #sidebar-chats-button, #sidebar-models-button) {
+	color: var(--color-base-600) !important;
+}
+
+/* Названия недавних чатов и время на светлом экране. */
+html:not(.dark) a[href^="/c/"].group > .text-base-500 { color: #555 !important; }
+html:not(.dark) a[href^="/c/"].group > .text-base-400 { color: #707070 !important; }
