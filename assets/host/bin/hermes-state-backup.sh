@@ -296,6 +296,20 @@ push_remote() {
         log "✓ pushed $(git -C "$REPO_DIR" rev-parse --short HEAD) to $GIT_REMOTE"
         return 0
     fi
+    # Не-fast-forward: в remote есть коммит, которого нет локально (правка через
+    # веб-UI GitHub). Репо — односторонний вывод из живого состояния хоста,
+    # поэтому внешнюю правку помечаем слитой (-s ours) и пушим снова: история не
+    # переписывается, конфликтов нет, бэкап перестаёт падать навсегда.
+    log "push rejected — merging remote main with -s ours and retrying"
+    if GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0 \
+            git -C "$REPO_DIR" fetch -q origin main 2>>"$LOG_FILE" \
+        && git -C "$REPO_DIR" merge -q -s ours origin/main \
+               -m "merge remote main (superseded by live state)" >>"$LOG_FILE" 2>&1 \
+        && GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0 \
+               git -C "$REPO_DIR" push -q origin main 2>>"$LOG_FILE"; then
+        log "✓ push recovered after auto-merge with remote ($(git -C "$REPO_DIR" rev-parse --short HEAD))"
+        return 0
+    fi
     return 1
 }
 

@@ -111,10 +111,36 @@ cat > "$REPO_DIR/README.md" <<'EOF'
 EOF
 
 cd "$REPO_DIR"
+
+push_main() {
+    GIT_ASKPASS="$ASKPASS" git -c core.askpass="$ASKPASS" push -q origin main 2>>"$LOG_FILE"
+}
+
+# Пуш с самоизлечением: внешний коммит (правка через веб-UI GitHub) делает ветку
+# не-fast-forward. Содержимое repo — односторонний вывод из sandbox, поэтому
+# внешнюю правку помечаем слитой (-s ours) и пушим снова: история не
+# переписывается, конфликтов нет, бэкап не падает навсегда.
+sync_push() {
+    push_main && return 0
+    log "push rejected — merging remote main with -s ours and retrying"
+    GIT_ASKPASS="$ASKPASS" git -c core.askpass="$ASKPASS" fetch -q origin main 2>>"$LOG_FILE" \
+        && git merge -q -s ours origin/main -m "merge remote main (superseded by live state)" >>"$LOG_FILE" 2>&1 \
+        && push_main || return 1
+    log "push recovered after auto-merge with remote"
+    return 0
+}
+
 git add -A
 changed="$(git diff --cached --name-only | wc -l)"
 if [[ "$changed" -eq 0 ]]; then
     log "no changes; nothing to commit"
+    # Правок нет, но прошлый пуш мог не пройти: локальный HEAD тогда висит на хосте.
+    local_head="$(git rev-parse HEAD)"
+    remote_head="$(GIT_ASKPASS="$ASKPASS" git -c core.askpass="$ASKPASS" ls-remote origin refs/heads/main 2>/dev/null | awk '{print $1}' | head -n1)"
+    if [[ -n "$remote_head" && "$remote_head" != "$local_head" ]]; then
+        log "local HEAD $local_head missing on remote — catch-up push"
+        sync_push || die "git push failed (catch-up)"
+    fi
     send_tg "🧠 Память пользователей: изменений нет (${users} аккаунтов), пуш не нужен."
     exit 0
 fi
@@ -122,9 +148,7 @@ fi
 git -c core.askpass="$ASKPASS" commit -q -m "memory snapshot $(date -u '+%Y-%m-%d %H:%M UTC')"
 sha="$(git rev-parse --short HEAD)"
 
-if ! GIT_ASKPASS="$ASKPASS" git -c core.askpass="$ASKPASS" push -q origin main 2>>"$LOG_FILE"; then
-    die "git push failed"
-fi
+sync_push || die "git push failed (auto-merge with remote did not help)"
 
 size="$(du -sh "$REPO_DIR/.git" | cut -f1)"
 log "pushed $sha ($changed files, $users users, repo $size)"
